@@ -1,0 +1,48 @@
+# Deps
+node_modules/
+app/node_modules/
+cli/node_modules/
+package-lock.json
+app/package-lock.json
+cli/package-lock.json
+
+# Env & secrets
+.env
+app/.env
+app/.env.local
+.env.*
+!.env.example
+
+# DB local (Turso is remote, local.db is legacy)
+local.db
+local.db-*
+*.db
+*.sqlite
+app/local.db
+
+# Build
+.svelte-kit/
+app/.svelte-kit/
+build/
+app/build/
+.output/
+.vercel/
+dist/
+.vite/
+
+# OS & editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.log
+npm-debug.log*
+/tmp/
+tmp/
+
+# Drizzle
+drizzle/
+app/drizzle/
+
+# CLI publish
+cli/*.tgz
