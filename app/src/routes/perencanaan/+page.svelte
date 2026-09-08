@@ -30,24 +30,69 @@
 
 	onMount(() => {
 		(async () => {
+			// 1. cek ?id= atau ?perencanaanId= di URL (deep link setelah deploy)
+			const urlId = new URLSearchParams(window.location.search).get('id') || new URLSearchParams(window.location.search).get('perencanaanId');
+			if (urlId) {
+				try {
+					const r = await fetch(`/api/perencanaan/${urlId}`);
+					if (r.ok) {
+						const d = await r.json();
+						// map DB -> Plan shape
+						plan = { perencanaan: { title: d.perencanaan.title, description: d.perencanaan.description }, fiturs: d.fiturs.map((f: { id: string; title: string; description: string; subFiturs: { id: string; title: string; description: string; tasks: { id: string; title: string; description: string; priority: string; estimate: string; status: string }[] }[] }) => ({ id: f.id, title: f.title, description: f.description, subFiturs: f.subFiturs.map((s) => ({ id: s.id, title: s.title, description: s.description, tasks: s.tasks })) })) } as Plan;
+						draftLang = d.perencanaan.lang ?? 'Bahasa Indonesia';
+						loading = false; await tick(); queueMicrotask(updateLines); return;
+					}
+				} catch {}
+			}
+
 			const d = loadDraft();
-			if (!d || !d.prompt) { await goto('/'); return; }
-			if (!d.techMode) { await goto('/preferensi'); return; }
-			draftLang = d.lang;
-			if (d.plan) { plan = d.plan; loading = false; await tick(); queueMicrotask(updateLines); }
-			else {
+			// 2. jika ada draft.dbId -> fetch DB (persisted workflow)
+			if (d?.dbId) {
+				try {
+					const r = await fetch(`/api/perencanaan/${d.dbId}`);
+					if (r.ok) {
+						const db = await r.json();
+						plan = { perencanaan: { title: db.perencanaan.title, description: db.perencanaan.description }, fiturs: db.fiturs.map((f: { id: string; title: string; description: string; subFiturs: { id: string; title: string; description: string; tasks: { id: string; title: string; description: string; priority: string; estimate: string; status: string }[] }[] }) => ({ id: f.id, title: f.title, description: f.description, subFiturs: f.subFiturs.map((s) => ({ id: s.id, title: s.title, description: s.description, tasks: s.tasks })) })) } as Plan;
+						draftLang = d.lang; loading = false; await tick(); queueMicrotask(updateLines); return;
+					}
+				} catch {}
+			}
+			// 3. jika ada draft.plan (offline) -> pakai itu
+			if (d?.plan) { plan = d.plan; draftLang = d.lang; loading = false; await tick(); queueMicrotask(updateLines); return; }
+			if (d?.prompt && d?.techMode) {
+				// 4. generate baru via LLM -> persist ke Turso
+				draftLang = d.lang;
 				try {
 					const res = await fetch('/api/plan', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ prompt: d.prompt, lang: d.lang, techMode: d.techMode, techStack: d.techStack, questions: d.questions, answers: d.answers }) });
 					const data = await res.json();
 					if (!res.ok) error = data.message ?? 'Gagal generate perencanaan';
-					else { plan = data.plan as Plan; saveDraft({ ...d, plan, dbId: data.dbId as string | undefined }); await tick(); queueMicrotask(updateLines); }
+					else { plan = data.plan as Plan; saveDraft({ ...d, plan, dbId: data.dbId as string | undefined }); if (data.dbId) history.replaceState({}, '', `/perencanaan?id=${data.dbId}`); await tick(); queueMicrotask(updateLines); }
 				} catch (e) { error = String(e); } finally { loading = false; }
+				return;
 			}
+			// 5. fallback: ambil latest dari Turso (jika refresh deploy tanpa sessionStorage)
+			try {
+				const r = await fetch('/api/perencanaan');
+				const list = await r.json();
+				if (Array.isArray(list) && list.length > 0) {
+					const latest = list[0];
+					const dr = await fetch(`/api/perencanaan/${latest.id}`);
+					if (dr.ok) {
+						const db = await dr.json();
+						plan = { perencanaan: { title: db.perencanaan.title, description: db.perencanaan.description }, fiturs: db.fiturs.map((f: { id: string; title: string; description: string; subFiturs: { id: string; title: string; description: string; tasks: { id: string; title: string; description: string; priority: string; estimate: string; status: string }[] }[] }) => ({ id: f.id, title: f.title, description: f.description, subFiturs: f.subFiturs.map((s) => ({ id: s.id, title: s.title, description: s.description, tasks: s.tasks })) })) } as Plan;
+						draftLang = db.perencanaan.lang ?? 'Bahasa Indonesia';
+						// simpan ke draft biar next reload cepat
+						saveDraft({ prompt: db.perencanaan.prompt, lang: db.perencanaan.lang, referensi: false, techMode: (db.perencanaan.techMode as 'ai'|'manual') ?? 'ai', techStack: db.perencanaan.techStackJson ? JSON.parse(db.perencanaan.techStackJson) : { frontend:'', backend:'', database:'', deployment:'' }, plan, dbId: latest.id });
+						history.replaceState({}, '', `/perencanaan?id=${latest.id}`);
+						loading = false; await tick(); queueMicrotask(updateLines); return;
+					}
+				}
+			} catch {}
+			// 6. benar-benar kosong -> ke create
+			await goto('/create');
 		})();
 		window.addEventListener('resize', updateLines);
-		window.addEventListener('mousemove', onMouseMove);
-		window.addEventListener('mouseup', onMouseUp);
-		return () => { window.removeEventListener('resize', updateLines); window.removeEventListener('mousemove', onMouseMove); window.removeEventListener('mouseup', onMouseUp); };
+		return () => window.removeEventListener('resize', updateLines);
 	});
 
 	$effect(() => { void selected; void plan; if (plan && !loading) queueMicrotask(updateLines); });
