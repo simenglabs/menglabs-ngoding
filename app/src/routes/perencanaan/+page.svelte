@@ -92,7 +92,13 @@
 			await goto('/create');
 		})();
 		window.addEventListener('resize', updateLines);
-		return () => window.removeEventListener('resize', updateLines);
+		window.addEventListener('mousemove', onMouseMove);
+		window.addEventListener('mouseup', onMouseUp);
+		return () => {
+			window.removeEventListener('resize', updateLines);
+			window.removeEventListener('mousemove', onMouseMove);
+			window.removeEventListener('mouseup', onMouseUp);
+		};
 	});
 
 	$effect(() => { void selected; void plan; if (plan && !loading) queueMicrotask(updateLines); });
