@@ -205,7 +205,7 @@ program
   .description(
     "Menglabs Ngoding — sync hosted platform ↔ local, bebas pakai agent CLI (claude, antigravity, cursor)",
   )
-  .version("0.1.0");
+  .version("0.2.1");
 
 // init
 program

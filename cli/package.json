@@ -1,6 +1,6 @@
 {
   "name": "menglabs-ngoding",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Menglabs Ngoding — sync platform ↔ local, bebas pakai agent CLI (claude, antigravity, cursor, dll)",
   "type": "module",
   "bin": {
