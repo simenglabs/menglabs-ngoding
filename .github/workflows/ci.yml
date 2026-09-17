@@ -25,6 +25,9 @@ jobs:
         env:
           DATABASE_URL: file:/tmp/ngoding-ci.db
           LLM_API_KEY: test-key
+      - name: Install CLI dependencies for end-to-end test
+        run: npm ci
+        working-directory: cli
       - run: npm test
         env:
           DATABASE_URL: file:/tmp/ngoding-ci-test.db
