@@ -10,6 +10,19 @@ import { createClient } from '@libsql/client';
 
 const appDir = path.resolve(import.meta.dirname, '..');
 const repoDir = path.resolve(appDir, '..');
+const viteBin = path.join(appDir, 'node_modules/vite/bin/vite.js');
+
+function spawnPreview(port, env) {
+	return spawn(
+		process.execPath,
+		[viteBin, 'preview', '--host', '127.0.0.1', '--port', String(port)],
+		{
+			cwd: appDir,
+			env,
+			stdio: ['ignore', 'pipe', 'pipe']
+		}
+	);
+}
 
 async function freePort() {
 	return new Promise((resolve, reject) => {
@@ -140,14 +153,7 @@ test(
 			LLM_BASE_URL: `http://127.0.0.1:${llmPort}`,
 			LLM_MAX_CONCURRENCY: '1'
 		};
-		const app = spawn(process.execPath, ['build'], {
-			cwd: appDir,
-			env: {
-				...appEnv,
-				PORT: String(appPort)
-			},
-			stdio: ['ignore', 'pipe', 'pipe']
-		});
+		const app = spawnPreview(appPort, appEnv);
 		let appLog = '';
 		app.stdout.on('data', (chunk) => (appLog += chunk));
 		app.stderr.on('data', (chunk) => (appLog += chunk));
@@ -351,11 +357,7 @@ test(
 		assert.equal(crossUser.response.status, 404);
 
 		const secondPort = await freePort();
-		const secondApp = spawn(process.execPath, ['build'], {
-			cwd: appDir,
-			env: { ...appEnv, PORT: String(secondPort) },
-			stdio: ['ignore', 'pipe', 'pipe']
-		});
+		const secondApp = spawnPreview(secondPort, appEnv);
 		t.after(() => secondApp.kill('SIGTERM'));
 		await waitFor(`http://127.0.0.1:${secondPort}/api/ready`, secondApp);
 		const loginStatuses = [];
