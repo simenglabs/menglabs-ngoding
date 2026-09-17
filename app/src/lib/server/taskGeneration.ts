@@ -5,8 +5,10 @@ import { chatCompletion, LlmError, parseJsonObject } from '$lib/server/llm';
 import { parseDetailedTask, TASK_DETAIL_CONTRACT } from '$lib/server/taskDetails';
 import { prependScaffold, type GeneratedTaskInput } from '$lib/server/taskScaffold';
 
+const COMPACT_TASK_DETAIL_CONTRACT = `Format task: {"title":"...","priority":"high|medium|low","estimate":"4h|1d|2d","details":{"goal":"...","context":"...","scope":["..."],"dependencies":["..."],"implementation":["..."],"acceptanceCriteria":["..."],"verification":["..."],"deliverables":["..."]}}. Tulis 350-500 kata yang spesifik untuk proyek. Wajib berisi minimal 2 poin scope, 1 dependency, 5 langkah implementasi, 4 acceptance criteria terukur, 3 skenario verifikasi, dan 2 deliverable. Jelaskan aliran data, validasi, error, serta state UI atau kontrak API jika relevan. Jangan mengarang isi repository.`;
+
 const systemPrompt = (compact: boolean) =>
-	`${compact ? 'Buat tepat satu task actionable dan mendalam' : 'Buat 1-2 task actionable dan mendalam'} untuk satu sub fitur. Output JSON valid tanpa markdown: {"tasks":[...task sesuai format di bawah...]}. Urutkan berdasarkan dependensi, jangan menduplikasi tugas yang sudah ada. ${TASK_DETAIL_CONTRACT}`;
+	`Buat tepat satu task actionable dan mendalam untuk satu sub fitur. Output JSON valid tanpa markdown: {"tasks":[...task sesuai format di bawah...]}. Jangan menduplikasi tugas yang sudah ada. ${compact ? COMPACT_TASK_DETAIL_CONTRACT : TASK_DETAIL_CONTRACT}`;
 
 export async function generateTasksForSubFeature(
 	subFiturId: string,
@@ -42,7 +44,7 @@ export async function generateTasksForSubFeature(
 				content: `Proyek: ${plan.title}\nFitur: ${feature.title}\nSub fitur: ${sub.title}\nDeskripsi: ${sub.description}\nDeskripsi proyek: ${plan.description}\nIde asli: ${plan.prompt}\nDeskripsi fitur: ${feature.description}\nTeknologi: ${plan.techStackJson}\nPertanyaan: ${plan.questionsJson}\nJawaban: ${plan.answersJson}\nBahasa: ${plan.lang}\nDokumen kebutuhan (maksimal 30.000 karakter): ${prd?.content.slice(0, 30_000) ?? 'Belum tersedia; gunakan ide dan jawaban.'}\nTugas yang sudah ada (maksimal 80): ${JSON.stringify(otherTasks)}`
 			}
 		],
-		{ maxTokens: options.compact ? 4000 : 6000, temperature: 0.4 }
+		{ maxTokens: options.compact ? 2500 : 3000, temperature: 0.4 }
 	);
 	const parsed = parseJsonObject(completion.content);
 	if (!Array.isArray(parsed.tasks) || !parsed.tasks.length || parsed.tasks.length > 8)

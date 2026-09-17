@@ -146,7 +146,7 @@ test(
 					if (
 						messages.includes('task actionable') &&
 						messages.includes('CLI worker') &&
-						body.max_tokens === 4000
+						body.max_tokens === 2500
 					)
 						compactRetries += 1;
 					send();
