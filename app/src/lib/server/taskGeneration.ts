@@ -5,9 +5,13 @@ import { chatCompletion, LlmError, parseJsonObject } from '$lib/server/llm';
 import { parseDetailedTask, TASK_DETAIL_CONTRACT } from '$lib/server/taskDetails';
 import { prependScaffold, type GeneratedTaskInput } from '$lib/server/taskScaffold';
 
-const SYSTEM = `Buat 3-4 task actionable dan mendalam untuk satu sub fitur. Output JSON valid tanpa markdown: {"tasks":[...task sesuai format di bawah...]}. Urutkan berdasarkan dependensi, jangan menduplikasi tugas yang sudah ada. ${TASK_DETAIL_CONTRACT}`;
+const systemPrompt = (compact: boolean) =>
+	`${compact ? 'Buat tepat satu task actionable dan mendalam' : 'Buat 1-2 task actionable dan mendalam'} untuk satu sub fitur. Output JSON valid tanpa markdown: {"tasks":[...task sesuai format di bawah...]}. Urutkan berdasarkan dependensi, jangan menduplikasi tugas yang sudah ada. ${TASK_DETAIL_CONTRACT}`;
 
-export async function generateTasksForSubFeature(subFiturId: string) {
+export async function generateTasksForSubFeature(
+	subFiturId: string,
+	options: { compact?: boolean } = {}
+) {
 	const [sub] = await db.select().from(subFitur).where(eq(subFitur.id, subFiturId)).limit(1);
 	if (!sub) throw new LlmError('INVALID_OUTPUT', 'sub fitur tidak ditemukan', 404);
 	const existing = await db.select().from(kanbanTask).where(eq(kanbanTask.subFiturId, sub.id));
@@ -32,13 +36,13 @@ export async function generateTasksForSubFeature(subFiturId: string) {
 
 	const completion = await chatCompletion(
 		[
-			{ role: 'system', content: SYSTEM },
+			{ role: 'system', content: systemPrompt(Boolean(options.compact)) },
 			{
 				role: 'user',
 				content: `Proyek: ${plan.title}\nFitur: ${feature.title}\nSub fitur: ${sub.title}\nDeskripsi: ${sub.description}\nDeskripsi proyek: ${plan.description}\nIde asli: ${plan.prompt}\nDeskripsi fitur: ${feature.description}\nTeknologi: ${plan.techStackJson}\nPertanyaan: ${plan.questionsJson}\nJawaban: ${plan.answersJson}\nBahasa: ${plan.lang}\nDokumen kebutuhan (maksimal 30.000 karakter): ${prd?.content.slice(0, 30_000) ?? 'Belum tersedia; gunakan ide dan jawaban.'}\nTugas yang sudah ada (maksimal 80): ${JSON.stringify(otherTasks)}`
 			}
 		],
-		{ maxTokens: 12000, temperature: 0.4 }
+		{ maxTokens: options.compact ? 4000 : 6000, temperature: 0.4 }
 	);
 	const parsed = parseJsonObject(completion.content);
 	if (!Array.isArray(parsed.tasks) || !parsed.tasks.length || parsed.tasks.length > 8)

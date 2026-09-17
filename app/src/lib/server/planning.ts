@@ -267,7 +267,8 @@ export async function processPlanningStep(
 				.where(eq(subFitur.perencanaanId, claimed.perencanaanId))
 				.orderBy(asc(fitur.orderIdx), asc(subFitur.orderIdx));
 			const subIndex = claimed.currentPart - 1;
-			if (subs[subIndex]) await generateTasksForSubFeature(subs[subIndex].id);
+			if (subs[subIndex])
+				await generateTasksForSubFeature(subs[subIndex].id, { compact: claimed.attempts > 0 });
 			const nextPart = Math.min(claimed.currentPart + 1, claimed.totalParts);
 			const completed = nextPart >= claimed.totalParts;
 			await db

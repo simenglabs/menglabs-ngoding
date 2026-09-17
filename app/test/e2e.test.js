@@ -119,6 +119,7 @@ test(
 		assert.equal(migration.status, 0, migration.stderr || migration.stdout);
 
 		let simulatedTimeouts = 0;
+		let compactRetries = 0;
 		const llmServer = http.createServer((request, response) => {
 			let raw = '';
 			request.on('data', (chunk) => (raw += chunk));
@@ -141,7 +142,15 @@ test(
 					simulatedTimeouts++ === 0
 				)
 					setTimeout(send, 250);
-				else send();
+				else {
+					if (
+						messages.includes('task actionable') &&
+						messages.includes('CLI worker') &&
+						body.max_tokens === 4000
+					)
+						compactRetries += 1;
+					send();
+				}
 			});
 		});
 		const llmPort = await listen(llmServer);
@@ -231,6 +240,7 @@ test(
 		assert.equal(job.status, 'completed', JSON.stringify(job));
 		assert.equal(job.progress, 100);
 		assert.equal(simulatedTimeouts, 2, 'task part should be retried once after timeout');
+		assert.equal(compactRetries, 1, 'timeout retry should use the smaller one-task request');
 		const projectId = job.perencanaanId;
 		const storedPlan = (await api(`/api/perencanaan/${projectId}`)).body;
 		const subFeatureId = storedPlan.fiturs[0].subFiturs[0].id;
