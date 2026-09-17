@@ -4,6 +4,7 @@
 	import { loadDraft, saveDraft } from '$lib/stores/draft.svelte';
 
 	let loading = $state(true);
+	let copied = $state(false);
 	let error = $state('');
 	let result = $state<{
 		id: string;
@@ -16,9 +17,13 @@
 	onMount(async () => {
 		const storedId = new URLSearchParams(window.location.search).get('id');
 		if (storedId) {
-			const response = await fetch(`/api/prd/${storedId}`);
-			if (response.ok) result = await response.json();
-			else error = (await response.json()).message ?? 'PRD tidak ditemukan';
+			try {
+				const response = await fetch(`/api/prd/${storedId}`);
+				if (response.ok) result = await response.json();
+				else error = 'Dokumen tidak ditemukan atau belum bisa dimuat.';
+			} catch {
+				error = 'Periksa koneksi lalu muat ulang halaman.';
+			}
 			loading = false;
 			return;
 		}
@@ -68,7 +73,14 @@
 	});
 
 	async function copy() {
-		if (result?.content) await navigator.clipboard.writeText(result.content);
+		try {
+			if (result?.content) {
+				await navigator.clipboard.writeText(result.content);
+				copied = true;
+			}
+		} catch {
+			error = 'Tidak bisa menyalin otomatis. Pilih teks dokumen lalu salin manual.';
+		}
 	}
 </script>
 
@@ -81,7 +93,9 @@
 		<button onclick={() => goto('/preferensi')} class="text-xs text-[#64748b] hover:text-white"
 			>← Kembali ke preferensi</button
 		>
-		<h1 class="mt-3 text-xl font-bold">Generating PRD...</h1>
+		<h1 class="mt-3 text-xl font-bold">
+			{loading ? 'Menyusun dokumen kebutuhan…' : 'Dokumen kebutuhan aplikasi'}
+		</h1>
 		{#if draft}
 			<p class="mt-1 text-xs text-[#64748b]">
 				Ide: "{draft.prompt.slice(0, 90)}..." · {draft.techMode === 'ai'
@@ -110,7 +124,7 @@
 					/></svg
 				>
 				<span class="text-sm text-[#94a3b8]"
-					>AI lagi nyusun PRD via antigravity/claude-opus-4-6-thinking... (±15-30 detik)</span
+					>Sedang menyusun dokumen dari ide dan jawabanmu. Tunggu hingga selesai.</span
 				>
 			</div>
 		{/if}
@@ -130,18 +144,15 @@
 		{#if result}
 			<div class="mt-6 overflow-hidden rounded-2xl border border-[#252f47] bg-[#0f172a]">
 				<div class="flex items-center justify-between border-b border-[#1e293b] px-4 py-3">
-					<div class="text-xs font-semibold">
-						✓ PRD siap <span class="font-mono font-normal text-[#64748b]"
-							>{result.id.slice(0, 8)} · {result.model} · {result.usage?.total_tokens ?? ''} tokens</span
-						>
-					</div>
+					<div class="text-xs font-semibold">Dokumen siap</div>
 					<div class="flex gap-2">
 						<button
 							onclick={copy}
-							class="rounded-full bg-[#1e293b] px-3 py-1 text-xs hover:bg-[#2a3958]">Copy</button
+							class="rounded-full bg-[#1e293b] px-3 py-1 text-xs hover:bg-[#2a3958]"
+							>{copied ? 'Tersalin' : 'Salin dokumen'}</button
 						>
 						<button
-							onclick={() => goto('/')}
+							onclick={() => goto('/create')}
 							class="rounded-full bg-[#c45a36] px-3 py-1 text-xs hover:bg-[#d06a47]"
 							>Buat baru</button
 						>

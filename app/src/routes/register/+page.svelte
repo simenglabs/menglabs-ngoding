@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
+	import { page } from '$app/state';
 	let name = $state('');
 	let email = $state('');
 	let password = $state('');
@@ -21,7 +22,8 @@
 				error = d.message ?? 'Register gagal';
 				return;
 			}
-			await goto('/dashboard');
+			const next = page.url.searchParams.get('next');
+			await goto(next?.startsWith('/') && !next.startsWith('//') ? next : '/dashboard');
 		} catch (e) {
 			error = String(e);
 		} finally {
@@ -40,26 +42,37 @@
 			><span class="text-sm font-bold">Menglabs Ngoding</span>
 		</div>
 		<h1 class="mt-4 text-xl font-bold">Daftar</h1>
-		<p class="mt-1 text-xs text-[#94a3b8]">Buat akun, semua recent project tersimpan di Turso</p>
+		<p class="mt-1 text-xs text-[#94a3b8]">
+			Simpan rencana dan pantau tugas proyekmu dalam satu akun.
+		</p>
 		<form onsubmit={submit} class="mt-5 space-y-3">
+			<label for="name" class="field-label">Nama</label>
 			<input
+				id="name"
+				autocomplete="name"
 				bind:value={name}
 				placeholder="Nama"
 				required
 				class="w-full rounded-xl border border-[#2a3958] bg-[#0f172a] px-3 py-2.5 text-sm placeholder:text-[#475569] focus:border-[#f97316] focus:outline-none"
 			/>
+			<label for="email" class="field-label">Email</label>
 			<input
+				id="email"
+				autocomplete="email"
 				bind:value={email}
 				type="email"
 				placeholder="Email"
 				required
 				class="w-full rounded-xl border border-[#2a3958] bg-[#0f172a] px-3 py-2.5 text-sm placeholder:text-[#475569] focus:border-[#f97316] focus:outline-none"
 			/>
+			<label for="password" class="field-label">Kata sandi</label>
 			<input
+				id="password"
+				autocomplete="new-password"
 				bind:value={password}
 				type="password"
 				minlength="8"
-				placeholder="Password (min 6)"
+				placeholder="Kata sandi (minimal 8 karakter)"
 				required
 				class="w-full rounded-xl border border-[#2a3958] bg-[#0f172a] px-3 py-2.5 text-sm placeholder:text-[#475569] focus:border-[#f97316] focus:outline-none"
 			/>
@@ -68,14 +81,16 @@
 				type="submit"
 				disabled={loading}
 				class="w-full rounded-xl bg-[#f97316] py-2.5 text-sm font-semibold text-white hover:bg-[#ea6a0f] disabled:opacity-50"
-				>{loading ? '...' : 'Daftar'}</button
+				>{loading ? 'Mohon tunggu…' : 'Daftar'}</button
 			>
 		</form>
 		<p class="mt-4 text-center text-xs text-[#64748b]">
-			Sudah punya akun? <a href="/login" class="text-[#f97316] hover:underline">Login</a>
+			Sudah punya akun? <a href={`/login${page.url.search}`} class="text-[#f97316] hover:underline"
+				>Masuk</a
+			>
 		</p>
 		<p class="mt-2 text-center text-xs">
-			<a href="/" class="text-[#64748b] hover:text-white">← Landing</a>
+			<a href="/" class="text-[#64748b] hover:text-white">← Beranda</a>
 		</p>
 	</div>
 </div>

@@ -20,12 +20,13 @@
 	let destroyed = false;
 	const pendingIds = new SvelteSet<string>();
 	let generating = $state(false);
+	let loading = $state(true);
 
 	const columns = [
-		{ id: 'backlog', title: 'Backlog', icon: '◷' },
-		{ id: 'todo', title: 'Todo', icon: '○' },
-		{ id: 'doing', title: 'In Progress', icon: '◐' },
-		{ id: 'done', title: 'Done', icon: '✓' }
+		{ id: 'todo', title: 'Siap dikerjakan', icon: '○' },
+		{ id: 'doing', title: 'Dikerjakan', icon: '◐' },
+		{ id: 'done', title: 'Selesai', icon: '✓' },
+		{ id: 'backlog', title: 'Nanti', icon: '◷' }
 	] as const;
 
 	type ColId = (typeof columns)[number]['id'];
@@ -67,6 +68,7 @@
 			} catch (cause) {
 				error = String(cause);
 			}
+			loading = false;
 			schedulePoll();
 			document.addEventListener('visibilitychange', onVisibilityChange);
 			return;
@@ -80,11 +82,13 @@
 		}
 		plan = d2.plan;
 		localTasks = flatten(d2.plan);
+		loading = false;
 	});
 	onDestroy(() => {
 		destroyed = true;
 		if (polling) clearTimeout(polling);
-		document.removeEventListener('visibilitychange', onVisibilityChange);
+		if (typeof document !== 'undefined')
+			document.removeEventListener('visibilitychange', onVisibilityChange);
 	});
 
 	function schedulePoll() {
@@ -248,7 +252,7 @@
 	}
 </script>
 
-<svelte:head><title>Kanban — Tasks {isDbMode ? '(DB)' : ''}</title></svelte:head>
+<svelte:head><title>Papan tugas — mager</title></svelte:head>
 
 <div class="min-h-screen bg-[#0a0f1f] text-white">
 	<div
@@ -258,58 +262,54 @@
 	<div class="relative mx-auto max-w-[1400px] px-4 py-6">
 		<div class="flex flex-wrap items-center justify-between gap-3">
 			<div>
-				<h1 class="text-xl font-bold">Kanban Board {isDbMode ? '· DB persisted' : ''}</h1>
+				<h1 class="text-xl font-bold">Papan tugas</h1>
 				<p class="text-xs text-[#64748b]">
-					{plan?.perencanaan.title ?? ''} · {tasks.length} tasks {dbId
-						? `· ${dbId.slice(0, 8)}`
-						: ''} · drag untuk pindah kolom → DB update via PATCH
+					{plan?.perencanaan.title ?? 'Memuat proyek…'} · {tasks.length} tugas. Status diperbarui otomatis.
+					Ubah status lewat pilihan di setiap kartu.
 				</p>
 			</div>
-			<div class="flex items-center gap-2">
+			<div class="flex flex-wrap items-center gap-2">
 				<button
 					onclick={() => goto(`/implementasi${dbId ? `?perencanaanId=${dbId}` : ''}`)}
 					class="rounded-full border border-[#f97316]/50 bg-[#f97316]/10 px-3 py-1.5 text-xs font-semibold text-[#f97316] hover:bg-[#f97316]/20"
-					>⚡ Implementasi</button
+					>Jalankan di komputer</button
 				>
 				<input
 					bind:value={search}
-					placeholder="Cari task..."
+					aria-label="Cari tugas"
+					placeholder="Cari tugas…"
 					class="rounded-full border border-[#2a3958] bg-[#0f172a] px-3 py-1.5 text-xs placeholder:text-[#475569] focus:border-[#334155] focus:outline-none"
 				/>
-				<button
-					onclick={generateAllMissing}
-					disabled={generating}
-					class="rounded-full bg-[#1a2235] px-3 py-1.5 text-xs hover:bg-[#23324d]"
-					>{generating ? 'Generating…' : 'Generate semua tasks'}</button
-				>
 				{#if isDbMode}<button
 						onclick={() => refreshTasks()}
-						class="rounded-full border border-[#2a3958] px-3 py-1.5 text-xs">Refresh</button
+						class="rounded-full border border-[#2a3958] px-3 py-1.5 text-xs">Muat ulang</button
 					>{/if}
-				<button
-					onclick={() => goto(dbId ? `/detail/${dbId}` : '/detail')}
-					class="rounded-full border border-[#2a3958] bg-[#1a2235] px-3 py-1.5 text-xs"
-					>Detail DB →</button
-				>
-				<button
-					onclick={() => goto(`/perencanaan${dbId ? `?id=${dbId}` : ''}`)}
-					class="rounded-full border border-[#2a3958] px-3 py-1.5 text-xs">← Perencanaan</button
-				>
 			</div>
 		</div>
+		<details class="mt-4 text-sm">
+			<summary>Lengkapi daftar tugas</summary>
+			<p class="help-text">Jika ada bagian fitur yang belum punya tugas, buat tugasnya di sini.</p>
+			<button
+				onclick={generateAllMissing}
+				disabled={generating || loading || !plan}
+				class="rounded-full bg-[#1a2235] px-3 py-1.5 text-xs hover:bg-[#23324d]"
+				>{generating ? 'Menyiapkan tugas…' : 'Lengkapi tugas yang belum dibuat'}</button
+			>
+		</details>
 		{#if error}<p
+				role="alert"
 				class="mt-3 rounded-xl border border-red-900 bg-red-950/50 p-3 text-xs text-red-200"
 			>
 				{error}
 			</p>{/if}
 
-		{#if tasks.length === 0}
+		{#if loading}<p role="status" class="mt-10 text-slate-300">Memuat papan tugas…</p>
+		{:else if tasks.length === 0 && !error}
 			<div
 				class="mt-12 rounded-2xl border border-dashed border-[#334155] bg-[#1a2235]/60 p-10 text-center"
 			>
 				<p class="text-sm text-[#94a3b8]">
-					Belum ada task di {isDbMode ? 'DB kanban_task' : 'draft'}. Balik ke Perencanaan → klik sub
-					fitur untuk generate, task otomatis INSERT ke DB (status todo).
+					Belum ada tugas. Buka rencana lalu buat tugas dari fitur yang ingin dikerjakan.
 				</p>
 				<button
 					onclick={() => goto(`/perencanaan${dbId ? `?id=${dbId}` : ''}`)}
@@ -320,7 +320,7 @@
 			<div class="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
 				{#each columns as col}
 					<div
-						class="flex min-h-[420px] flex-col rounded-2xl border border-[#2a3958] bg-[#151c2f]/70"
+						class="flex min-h-[120px] flex-col rounded-2xl border border-[#2a3958] bg-[#151c2f]/70 md:min-h-[320px]"
 						ondragover={allowDrop}
 						ondrop={(e) => onDrop(e, col.id)}
 						role="region"
@@ -345,16 +345,22 @@
 										></span>
 										<p class="flex-1 text-xs leading-tight font-medium">{t.title}</p>
 									</div>
-									<p class="mt-1 line-clamp-2 text-[11px] leading-relaxed text-[#94a3b8]">
-										{t.description}
-									</p>
+									<details class="mt-2 text-sm">
+										<summary class="text-slate-300">Lihat instruksi</summary>
+										<p class="help-text whitespace-pre-line">{t.description}</p>
+									</details>
 									{#if resultLabel(t)}<p class="mt-1 text-[10px] text-emerald-300">
 											{resultLabel(t)}
 										</p>{/if}
 									<div class="mt-2 flex items-center gap-1">
 										<span
 											class="max-w-[110px] truncate rounded-full bg-[#1e293b] px-2 py-0.5 text-[10px] text-[#94a3b8]"
-											>{t.subFiturTitle}</span
+											>{t.subFiturTitle ??
+												{
+													high: 'Prioritas tinggi',
+													medium: 'Prioritas sedang',
+													low: 'Prioritas rendah'
+												}[t.priority]}</span
 										><span class="ml-auto text-[10px] text-[#475569]">{t.estimate}</span>
 									</div>
 									<select
@@ -369,7 +375,9 @@
 									</select>
 								</div>
 							{:else}
-								<p class="py-8 text-center text-xs text-[#475569]">Drop task di sini</p>
+								<p class="py-8 text-center text-xs text-[#475569]">
+									{search ? 'Tidak ada tugas yang cocok.' : 'Belum ada tugas di tahap ini.'}
+								</p>
 							{/each}
 						</div>
 					</div>

@@ -101,26 +101,29 @@
 	async function lanjut() {
 		const d = loadDraft();
 		if (!d) return;
+		for (const q of questions) {
+			if ((customInputs[q.id] ?? '').trim()) addCustom(q);
+		}
 		saveDraft({ ...d, questions, answers });
 		await goto('/perencanaan');
 	}
 </script>
 
 <svelte:head>
-	<title>Beberapa pertanyaan — PRD Builder</title>
+	<title>Lengkapi kebutuhan — PRD Builder</title>
 </svelte:head>
 
 <div class="min-h-screen bg-[#121827] px-4 py-10 text-white">
 	<div class="mx-auto max-w-[720px]">
-		<h1 class="text-[28px] font-extrabold tracking-tight">Beberapa pertanyaan</h1>
+		<h1 class="text-[28px] font-extrabold tracking-tight">Lengkapi kebutuhan</h1>
 		<div class="mt-1 flex items-center justify-between">
 			<p class="text-[14px] text-[#94a3b8]">
-				Biar PRD-nya lebih akurat. Jawab semua pertanyaan di bawah.
+				Jawab yang kamu tahu. Pertanyaan yang belum pasti boleh dikosongkan.
 			</p>
 			<span class="text-xs font-medium text-[#94a3b8]">{answered}/{questions.length || 5}</span>
 		</div>
 		{#if draftPrompt}<p class="mt-2 truncate text-xs text-[#475569]">
-				Ide: "{draftPrompt}..." · {loading ? 'AI lagi analisa...' : ''}
+				Ide: "{draftPrompt}..." · {loading ? 'Sedang menyiapkan pertanyaan…' : ''}
 			</p>{/if}
 
 		{#if loading}
@@ -135,7 +138,9 @@
 			<div
 				class="mt-6 rounded-xl border border-red-900/50 bg-red-950/40 px-4 py-3 text-sm text-red-200"
 			>
-				{error}
+				{error}<button class="secondary-button mt-3" onclick={() => window.location.reload()}
+					>Coba lagi</button
+				>
 			</div>
 		{/if}
 
@@ -153,12 +158,13 @@
 							</p>
 							<button
 								onclick={() => skip(q)}
-								class="shrink-0 text-xs text-[#64748b] hover:text-[#94a3b8]">Lewati</button
+								class="shrink-0 text-xs text-[#64748b] hover:text-[#94a3b8]">Hapus jawaban</button
 							>
 						</div>
 
 						{#if q.type === 'text'}
 							<textarea
+								aria-label={q.text}
 								value={typeof answers[q.id] === 'string' ? (answers[q.id] as string) : ''}
 								oninput={(e) => (answers[q.id] = (e.currentTarget as HTMLTextAreaElement).value)}
 								placeholder={q.placeholder ?? 'Ketik jawaban...'}
@@ -170,6 +176,7 @@
 								{#each q.options ?? [] as opt}
 									<button
 										onclick={() => toggleOption(q, opt)}
+										aria-pressed={isSelected(q, opt)}
 										class="rounded-full border px-3.5 py-1.5 text-xs font-medium transition
 										{isSelected(q, opt)
 											? 'border-[#c45a36] bg-[#2a1f1a] text-white'
@@ -181,6 +188,7 @@
 								<!-- + Lainnya inline input -->
 								<div class="flex items-center gap-1">
 									<input
+										aria-label={`Jawaban lain untuk ${q.text}`}
 										bind:value={customInputs[q.id]}
 										placeholder="+ Lainnya"
 										onkeydown={(e) => {
@@ -193,6 +201,7 @@
 									/>
 									{#if (customInputs[q.id] ?? '').trim()}
 										<button
+											aria-label="Tambahkan jawaban"
 											onclick={() => addCustom(q)}
 											class="rounded-full bg-[#1e293b] px-2 py-1 text-xs text-white">+</button
 										>
@@ -217,11 +226,11 @@
 					onclick={lanjut}
 					class="rounded-xl bg-[#c45a36] px-7 py-2.5 text-sm font-semibold text-white hover:bg-[#d06a47]"
 				>
-					Lanjut {answered > 0 ? `(${answered} terjawab)` : ''}
+					Buat rencana dan tugas →
 				</button>
 			</div>
 			<p class="mt-2 text-center text-[11px] text-[#475569]">
-				Lewati boleh — tapi makin lengkap, PRD makin akurat. Hasil tetap disimpan untuk LLM final.
+				Jawabanmu membantu menentukan fitur dan tugas yang akan dibuat.
 			</p>
 		{/if}
 	</div>

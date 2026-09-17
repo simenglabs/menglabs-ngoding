@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import test from 'node:test';
+import { detailedTask } from './fixtures/detailed-task.js';
 import { createClient } from '@libsql/client';
 
 const appDir = path.resolve(import.meta.dirname, '..');
@@ -68,6 +69,27 @@ function run(command, args, options = {}) {
 
 function mockCompletion(body) {
 	const system = body.messages?.[0]?.content ?? '';
+	if (
+		system.includes('breakdown proyek') &&
+		body.messages?.[1]?.content?.includes('brief-singkat')
+	) {
+		return JSON.stringify({
+			perencanaan: { title: 'Invalid brief', description: 'Output harus ditolak' },
+			fiturs: [
+				{
+					title: 'Fitur',
+					description: 'Fitur pengujian',
+					subFiturs: [
+						{
+							title: 'Bagian',
+							description: 'Bagian pengujian',
+							tasks: [{ title: 'Buat fitur', description: 'Selesaikan fitur.' }]
+						}
+					]
+				}
+			]
+		});
+	}
 	if (system.includes('breakdown proyek')) {
 		return JSON.stringify({
 			perencanaan: { title: 'E2E Platform', description: 'Rencana pengujian penuh' },
@@ -79,6 +101,11 @@ function mockCompletion(body) {
 						{
 							title: 'CLI worker',
 							description: 'Worker mengambil task dari platform',
+							tasks: [detailedTask()]
+						},
+						{
+							title: 'Pelaporan hasil',
+							description: 'Tampilkan hasil eksekusi worker dan verifikasi',
 							tasks: []
 						}
 					]
@@ -86,18 +113,7 @@ function mockCompletion(body) {
 			]
 		});
 	}
-	if (system.includes('task actionable')) {
-		return JSON.stringify({
-			tasks: [
-				{
-					title: 'Jalankan agent lokal',
-					description: 'Tulis marker sebagai bukti executable lokal berjalan',
-					priority: 'high',
-					estimate: '1h'
-				}
-			]
-		});
-	}
+	if (system.includes('task actionable')) return JSON.stringify({ tasks: [detailedTask()] });
 	if (system.includes('pertanyaan klarifikasi')) {
 		return JSON.stringify([
 			{ text: 'Siapa pengguna?', type: 'text' },
@@ -204,6 +220,13 @@ test(
 		assert.equal(questions.response.status, 200, JSON.stringify(questions.body));
 		assert.equal(questions.body.questions.length, 5);
 
+		const invalidBrief = await api('/api/plan', {
+			method: 'POST',
+			body: JSON.stringify({ prompt: 'brief-singkat untuk uji penolakan' })
+		});
+		assert.equal(invalidBrief.response.status, 502);
+		assert.equal(invalidBrief.body.code, 'INVALID_OUTPUT');
+		assert.equal((await api('/api/perencanaan')).body.length, 0);
 		const planned = await api('/api/plan', {
 			method: 'POST',
 			body: JSON.stringify({
@@ -239,7 +262,9 @@ test(
 			body: JSON.stringify({ subFiturId: subFeatureId })
 		});
 		assert.equal(generated.response.status, 200, JSON.stringify(generated.body));
-		assert.equal(generated.body.tasks.length, 1);
+		assert.equal(generated.body.tasks.length, 2);
+		assert.match(generated.body.tasks[1].description, /Kriteria selesai/);
+		assert.ok(generated.body.tasks[1].description.length > 2000);
 		assert.equal(generated.body.tasks[0].title, 'WAJIB: Buat kerangka frontend dan backend');
 
 		const createdToken = await api('/api/agent/tokens', {
@@ -327,6 +352,8 @@ test(
 		assert.match(cli.stdout, /antrean kosong/);
 		const taskContext = JSON.parse(await readFile(marker, 'utf8'));
 		assert.match(taskContext.prdContent, /Acceptance criteria/);
+		assert.match(taskContext.description, /Cara menguji/);
+		assert.ok(taskContext.description.length > 2000);
 
 		const kanban = await api(`/api/kanban?perencanaanId=${projectId}`);
 		assert.equal(kanban.response.status, 200);
@@ -334,6 +361,21 @@ test(
 		const result = JSON.parse(kanban.body[0].resultJson);
 		assert.equal(result.execution.exitCode, 0);
 		assert.equal(result.verification.status, 'passed');
+
+		const detailed = await api('/api/tasks', {
+			method: 'POST',
+			body: JSON.stringify({ subFiturId: planned.body.plan.fiturs[0].subFiturs[1].id })
+		});
+		assert.equal(detailed.response.status, 200, JSON.stringify(detailed.body));
+		assert.equal(detailed.body.generated, true);
+		assert.ok(detailed.body.tasks[0].description.includes('Prasyarat dan asumsi'));
+		assert.ok(detailed.body.tasks[0].description.length > 2000);
+		const reused = await api('/api/tasks', {
+			method: 'POST',
+			body: JSON.stringify({ subFiturId: planned.body.plan.fiturs[0].subFiturs[1].id })
+		});
+		assert.equal(reused.body.generated, false);
+		assert.equal(reused.body.tasks[0].id, detailed.body.tasks[0].id);
 
 		const tokenList = await api('/api/agent/tokens');
 		assert.equal(tokenList.body.filter((token) => !token.revokedAt).length, 1);

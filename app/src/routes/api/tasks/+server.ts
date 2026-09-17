@@ -1,14 +1,15 @@
 import { json } from '@sveltejs/kit';
 import { db } from '$lib/server/db';
-import { fitur, subFitur, kanbanTask, perencanaan } from '$lib/server/db/schema';
-import { eq } from 'drizzle-orm';
+import { fitur, subFitur, kanbanTask, perencanaan, prdDocument } from '$lib/server/db/schema';
+import { eq, desc } from 'drizzle-orm';
 import { readJson, requiredString, requireOwnedSubFeature, requireUser } from '$lib/server/http';
 import { rateLimit } from '$lib/server/rateLimit';
 import { chatCompletion, LlmError, parseJsonObject } from '$lib/server/llm';
-import { prependScaffold, type GeneratedTaskInput } from '$lib/server/taskScaffold';
+import { prependScaffold } from '$lib/server/taskScaffold';
+import { parseDetailedTask, TASK_DETAIL_CONTRACT } from '$lib/server/taskDetails';
 import type { RequestHandler } from './$types';
 
-const SYSTEM = `Buat 4-6 task actionable untuk satu sub fitur. Output JSON valid tanpa markdown: {"tasks":[{"title":"...","description":"...","priority":"high|medium|low","estimate":"4h|1d|2d"}]}.`;
+const SYSTEM = `Buat 3-4 task actionable dan mendalam untuk satu sub fitur. Output JSON valid tanpa markdown: {"tasks":[...task sesuai format di bawah...]}. Urutkan berdasarkan dependensi, jangan menduplikasi tugas yang sudah ada. ${TASK_DETAIL_CONTRACT}`;
 
 export const POST: RequestHandler = async ({ request, locals }) => {
 	const current = requireUser(locals.user);
@@ -19,9 +20,20 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 	if (existing.length || sub.tasksGeneratedAt) return json({ tasks: existing, generated: false });
 	const limited = await rateLimit(`tasks:${current.id}`, 30, 60 * 60_000);
 	if (limited) return limited;
-	const [[feature], [plan]] = await Promise.all([
+	const [[feature], [plan], [prd], otherTasks] = await Promise.all([
 		db.select().from(fitur).where(eq(fitur.id, sub.fiturId)).limit(1),
-		db.select().from(perencanaan).where(eq(perencanaan.id, sub.perencanaanId)).limit(1)
+		db.select().from(perencanaan).where(eq(perencanaan.id, sub.perencanaanId)).limit(1),
+		db
+			.select({ content: prdDocument.content })
+			.from(prdDocument)
+			.where(eq(prdDocument.perencanaanId, sub.perencanaanId))
+			.orderBy(desc(prdDocument.createdAt))
+			.limit(1),
+		db
+			.select({ title: kanbanTask.title, status: kanbanTask.status })
+			.from(kanbanTask)
+			.where(eq(kanbanTask.perencanaanId, sub.perencanaanId))
+			.limit(80)
 	]);
 	try {
 		const completion = await chatCompletion(
@@ -29,34 +41,24 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 				{ role: 'system', content: SYSTEM },
 				{
 					role: 'user',
-					content: `Proyek: ${plan.title}\nFitur: ${feature.title}\nSub fitur: ${sub.title}\nDeskripsi: ${sub.description}\nBahasa: ${plan.lang}`
+					content: `Proyek: ${plan.title}\nFitur: ${feature.title}\nSub fitur: ${sub.title}\nDeskripsi: ${sub.description}\nDeskripsi proyek: ${plan.description}\nIde asli: ${plan.prompt}\nDeskripsi fitur: ${feature.description}\nTeknologi: ${plan.techStackJson}\nPertanyaan: ${plan.questionsJson}\nJawaban: ${plan.answersJson}\nBahasa: ${plan.lang}\nDokumen kebutuhan (maksimal 30.000 karakter): ${prd?.content.slice(0, 30_000) ?? 'Belum tersedia; gunakan ide dan jawaban.'}\nTugas yang sudah ada (maksimal 80): ${JSON.stringify(otherTasks)}`
 				}
 			],
-			{ maxTokens: 1500, temperature: 0.5 }
+			{ maxTokens: 12000, temperature: 0.4 }
 		);
 		const parsed = parseJsonObject(completion.content);
 		if (!Array.isArray(parsed.tasks) || !parsed.tasks.length || parsed.tasks.length > 8)
 			throw new LlmError('INVALID_OUTPUT', 'invalid tasks');
-		const normalized: GeneratedTaskInput[] = parsed.tasks.map((raw) => {
-			if (!raw || typeof raw !== 'object') throw new LlmError('INVALID_OUTPUT', 'invalid task');
-			const item = raw as Record<string, unknown>;
-			if (typeof item.title !== 'string' || !item.title.trim() || item.title.length > 300)
-				throw new LlmError('INVALID_OUTPUT', 'invalid task title');
-			if (
-				typeof item.description !== 'string' ||
-				!item.description.trim() ||
-				item.description.length > 2000
-			)
-				throw new LlmError('INVALID_OUTPUT', 'invalid task description');
-			const title = item.title.trim();
-			const description = item.description.trim();
-			const priority =
-				item.priority === 'high' || item.priority === 'medium' || item.priority === 'low'
-					? item.priority
-					: 'medium';
-			const estimate = typeof item.estimate === 'string' ? item.estimate.slice(0, 20) : '1d';
-			return { title, description, priority, estimate };
-		});
+		let normalized;
+		try {
+			normalized = parsed.tasks.map(parseDetailedTask);
+		} catch (cause) {
+			throw new LlmError(
+				'INVALID_OUTPUT',
+				cause instanceof Error ? cause.message : 'Detail tugas belum lengkap.'
+			);
+		}
+
 		const rows = await db.transaction(async (tx) => {
 			const [locked] = await tx
 				.update(subFitur)

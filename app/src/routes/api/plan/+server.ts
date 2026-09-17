@@ -5,9 +5,10 @@ import { requireUser, readJson, requiredString } from '$lib/server/http';
 import { rateLimit } from '$lib/server/rateLimit';
 import { chatCompletion, LlmError, parseJsonObject } from '$lib/server/llm';
 import { prependScaffold } from '$lib/server/taskScaffold';
+import { parseDetailedTask, TASK_DETAIL_CONTRACT } from '$lib/server/taskDetails';
 import type { RequestHandler } from './$types';
 
-const SYSTEM = `Buat breakdown proyek sebagai JSON valid tanpa markdown: {"perencanaan":{"title":"...","description":"..."},"fiturs":[{"title":"...","description":"...","subFiturs":[{"title":"...","description":"...","tasks":[{"title":"...","description":"...","priority":"high|medium|low","estimate":"2h|1d"}]}]}]}. Buat 3-4 fitur dan 2-4 sub fitur per fitur. Tasks hanya untuk satu sub fitur pertama, lainnya array kosong. Task pertama wajib menyiapkan kerangka frontend dan backend sesuai stack sebelum implementasi fitur. Bahasa mengikuti permintaan.`;
+const SYSTEM = `Buat breakdown proyek sebagai JSON valid tanpa markdown: {"perencanaan":{"title":"...","description":"..."},"fiturs":[{"title":"...","description":"...","subFiturs":[{"title":"...","description":"...","tasks":[]}]}]}. Buat 3-4 fitur dan 2-4 sub fitur per fitur. Buat 2-3 task implementasi mendalam hanya untuk sub fitur pertama, lainnya array kosong. Sistem menambahkan task kerangka frontend dan backend terlebih dahulu; jangan buat duplikat task kerangka. Bahasa mengikuti permintaan. ${TASK_DETAIL_CONTRACT}`;
 type GeneratedTask = {
 	title: string;
 	description: string;
@@ -62,19 +63,15 @@ function validatePlan(value: Record<string, unknown>): GeneratedPlan {
 					return {
 						title: short(sub.title, 'sub feature title', 200),
 						description: short(sub.description, 'sub feature description', 1000),
-						tasks: rawTasks.map((rawTask) => {
-							if (!rawTask || typeof rawTask !== 'object')
-								throw new LlmError('INVALID_OUTPUT', 'invalid task');
-							const task = rawTask as Record<string, unknown>;
-							const priority = ['high', 'medium', 'low'].includes(String(task.priority))
-								? (String(task.priority) as GeneratedTask['priority'])
-								: 'medium';
-							return {
-								title: short(task.title, 'task title', 300),
-								description: short(task.description, 'task description', 2000),
-								priority,
-								estimate: short(task.estimate ?? '1d', 'estimate', 20)
-							};
+						tasks: rawTasks.map((task) => {
+							try {
+								return parseDetailedTask(task);
+							} catch (cause) {
+								throw new LlmError(
+									'INVALID_OUTPUT',
+									cause instanceof Error ? cause.message : 'Detail tugas belum lengkap.'
+								);
+							}
 						})
 					};
 				})
@@ -91,14 +88,14 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 	const prompt = requiredString(body, 'prompt', 20_000);
 	const lang = typeof body.lang === 'string' ? body.lang.slice(0, 50) : 'Bahasa Indonesia';
 	const techMode = body.techMode === 'manual' ? 'manual' : 'ai';
-	const context = `Bahasa: ${lang}\nMode stack: ${techMode}\nStack: ${JSON.stringify(body.techStack ?? {})}\nJawaban: ${JSON.stringify(body.answers ?? {})}\nIde: ${prompt}`;
+	const context = `Bahasa: ${lang}\nMode stack: ${techMode}\nStack: ${JSON.stringify(body.techStack ?? {})}\nPertanyaan: ${JSON.stringify(body.questions ?? [])}\nJawaban: ${JSON.stringify(body.answers ?? {})}\nIde: ${prompt}`;
 	try {
 		const completion = await chatCompletion(
 			[
 				{ role: 'system', content: SYSTEM },
 				{ role: 'user', content: context }
 			],
-			{ maxTokens: 4000, temperature: 0.6 }
+			{ maxTokens: 12000, temperature: 0.4 }
 		);
 		const generated = validatePlan(parseJsonObject(completion.content));
 		generated.fiturs[0].subFiturs[0].tasks = prependScaffold(

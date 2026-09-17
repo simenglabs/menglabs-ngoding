@@ -22,11 +22,11 @@
 	onMount(() => {
 		const d = loadDraft();
 		if (!d || !d.prompt) {
-			goto('/');
+			goto('/create');
 			return;
 		}
 		promptPreview = d.prompt.slice(0, 80);
-		techMode = d.techMode;
+		techMode = d.techMode ?? 'ai';
 		stack = d.techStack ?? { frontend: '', backend: '', database: '', deployment: '' };
 		draftLoaded = true;
 	});
@@ -42,7 +42,16 @@
 		const d = loadDraft();
 		if (!d) return;
 		// simpan pilihan tech, lanjut ke clarifying questions (LLM analisa prompt dulu)
-		saveDraft({ ...d, techMode, techStack: { ...stack } });
+		const changed =
+			d.techMode !== techMode || JSON.stringify(d.techStack) !== JSON.stringify(stack);
+		saveDraft({
+			...d,
+			techMode,
+			techStack: { ...stack },
+			...(changed
+				? { questions: undefined, answers: undefined, plan: undefined, prdResult: undefined }
+				: {})
+		});
 		await goto('/pertanyaan');
 	}
 </script>
@@ -56,7 +65,7 @@
 		<!-- header -->
 		<h1 class="text-[28px] font-extrabold tracking-tight">Preferensi teknologi</h1>
 		<p class="mt-1 text-[14px] text-[#94a3b8]">
-			Udah punya pilihan tech stack, atau mau AI yang tentuin?
+			Belum mengenal pilihan teknologinya? Gunakan pilihan AI untuk melanjutkan.
 		</p>
 		{#if draftLoaded}
 			<p
@@ -71,6 +80,7 @@
 		<div class="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2">
 			<button
 				onclick={() => selectMode('ai')}
+				aria-pressed={techMode === 'ai'}
 				class="rounded-2xl border-2 bg-[#1e293b]/60 p-5 text-left transition
 				{techMode === 'ai' ? 'border-[#c45a36] bg-[#242534]' : 'border-[#2a3958] hover:border-[#334155]'}"
 			>
@@ -90,14 +100,15 @@
 						/><path d="M16 11h.01" /><path d="M8 15h8" /></svg
 					>
 				</div>
-				<p class="mt-3 text-sm font-semibold">Biarkan AI pilih</p>
+				<p class="mt-3 text-sm font-semibold">Pilihkan untuk saya (disarankan)</p>
 				<p class="mt-1 text-xs leading-relaxed text-[#94a3b8]">
-					AI rekomendasiin stack yang paling cocok buat project kamu
+					AI memilih teknologi berdasarkan kebutuhan aplikasi kamu.
 				</p>
 			</button>
 
 			<button
 				onclick={() => selectMode('manual')}
+				aria-pressed={techMode === 'manual'}
 				class="rounded-2xl border-2 bg-[#1e293b]/60 p-5 text-left transition
 				{techMode === 'manual'
 					? 'border-[#c45a36] bg-[#242534]'
@@ -119,14 +130,16 @@
 				</div>
 				<p class="mt-3 text-sm font-semibold">Pilih sendiri</p>
 				<p class="mt-1 text-xs leading-relaxed text-[#94a3b8]">
-					Kamu tentuin teknologi yang mau dipakai
+					Untuk kamu yang sudah punya pilihan teknologi.
 				</p>
 			</button>
 		</div>
 
 		<!-- layer selects — hanya jika manual -->
 		{#if techMode === 'manual'}
-			<p class="mt-6 text-xs font-medium text-[#94a3b8]">Pilih teknologi untuk setiap layer</p>
+			<p class="mt-6 text-xs font-medium text-[#94a3b8]">
+				Pilihan boleh dikosongkan. AI akan melengkapi yang belum dipilih.
+			</p>
 			<div class="mt-3 grid grid-cols-1 gap-4 sm:grid-cols-2">
 				<!-- Frontend -->
 				<div class="rounded-2xl border border-[#2a3958] bg-[#1e293b]/50 p-4">
@@ -148,10 +161,11 @@
 						</span>
 						<div>
 							<p class="text-sm font-semibold">Frontend</p>
-							<p class="text-xs text-[#94a3b8]">UI & tampilan user</p>
+							<p class="text-xs text-[#94a3b8]">Tampilan yang dilihat pengguna</p>
 						</div>
 					</div>
 					<select
+						aria-label="Teknologi frontend"
 						bind:value={stack.frontend}
 						class="mt-3 w-full rounded-xl border border-[#2a3958] bg-[#0f172a] px-3 py-2.5 text-sm text-white focus:border-[#c45a36] focus:outline-none"
 					>
@@ -180,10 +194,11 @@
 						</span>
 						<div>
 							<p class="text-sm font-semibold">Backend</p>
-							<p class="text-xs text-[#94a3b8]">Logic & API server</p>
+							<p class="text-xs text-[#94a3b8]">Proses dan aturan aplikasi</p>
 						</div>
 					</div>
 					<select
+						aria-label="Teknologi backend"
 						bind:value={stack.backend}
 						class="mt-3 w-full rounded-xl border border-[#2a3958] bg-[#0f172a] px-3 py-2.5 text-sm text-white focus:border-[#c45a36] focus:outline-none"
 					>
@@ -216,6 +231,7 @@
 						</div>
 					</div>
 					<select
+						aria-label="Teknologi database"
 						bind:value={stack.database}
 						class="mt-3 w-full rounded-xl border border-[#2a3958] bg-[#0f172a] px-3 py-2.5 text-sm text-white focus:border-[#c45a36] focus:outline-none"
 					>
@@ -244,10 +260,11 @@
 						</span>
 						<div>
 							<p class="text-sm font-semibold">Deployment</p>
-							<p class="text-xs text-[#94a3b8]">Hosting & infra</p>
+							<p class="text-xs text-[#94a3b8]">Tempat aplikasi dijalankan</p>
 						</div>
 					</div>
 					<select
+						aria-label="Teknologi deployment"
 						bind:value={stack.deployment}
 						class="mt-3 w-full rounded-xl border border-[#2a3958] bg-[#0f172a] px-3 py-2.5 text-sm text-white focus:border-[#c45a36] focus:outline-none"
 					>
@@ -258,13 +275,14 @@
 			</div>
 		{/if}
 
-		<div class="mt-8 flex justify-end">
+		<div class="mt-8 flex items-center justify-between gap-3">
+			<a href="/create" class="secondary-button">← Ubah ide</a>
 			<button
 				onclick={lanjut}
 				disabled={!canLanjut}
 				class="rounded-xl bg-[#c45a36] px-7 py-2.5 text-sm font-semibold text-white shadow hover:bg-[#d06a47] disabled:cursor-not-allowed disabled:opacity-40"
 			>
-				Lanjut
+				Lanjut: lengkapi kebutuhan →
 			</button>
 		</div>
 	</div>

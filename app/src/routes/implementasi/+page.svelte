@@ -18,64 +18,102 @@
 	>([]);
 	let copied = $state<string | null>(null);
 
-	onMount(async () => {
+	let projects = $state<Array<{ id: string; title: string }>>([]);
+	let busy = $state(false);
+	let loading = $state(true);
+	onMount(() => {
+		void initialize();
+	});
+	async function initialize() {
+		loading = true;
+		tokenError = '';
 		apiBase = window.location.origin;
 		perencanaanId = new URLSearchParams(window.location.search).get('perencanaanId') ?? '';
-		await loadTokens();
-	});
-
+		try {
+			const response = await fetch('/api/perencanaan');
+			if (!response.ok)
+				throw new Error('Daftar proyek belum bisa dimuat. Coba lagi atau masuk kembali.');
+			projects = await response.json();
+			await loadTokens();
+		} catch (cause) {
+			tokenError = cause instanceof Error ? cause.message : 'Periksa koneksi lalu coba lagi.';
+		} finally {
+			loading = false;
+		}
+	}
 	async function loadTokens() {
 		const response = await fetch('/api/agent/tokens');
-		if (!response.ok) {
-			tokenError = 'Gagal memuat daftar token.';
-			return;
-		}
+		if (!response.ok) throw new Error('Daftar akses belum bisa dimuat. Coba lagi.');
 		tokens = (await response.json()).filter(
 			(token: { revokedAt: string | null }) => !token.revokedAt
 		);
 	}
-
-	async function createToken() {
+	async function selectProject() {
+		apiKey = '';
+		tokenId = '';
+		copied = null;
 		tokenError = '';
-		if (!perencanaanId) {
-			tokenError = 'Pilih proyek terlebih dahulu.';
-			return;
-		}
-		const response = await fetch('/api/agent/tokens', {
-			method: 'POST',
-			headers: { 'content-type': 'application/json' },
-			body: JSON.stringify({ perencanaanId, name: 'CLI local' })
-		});
-		const data = await response.json();
-		if (!response.ok) {
-			tokenError = data.message ?? 'Gagal membuat token';
-			return;
-		}
-		apiKey = data.token;
-		tokenId = data.id;
-		await loadTokens();
+		await goto(
+			`/implementasi${perencanaanId ? `?perencanaanId=${encodeURIComponent(perencanaanId)}` : ''}`,
+			{ replaceState: true, noScroll: true }
+		);
 	}
-
+	async function createToken() {
+		if (busy || !perencanaanId) return;
+		busy = true;
+		tokenError = '';
+		try {
+			const response = await fetch('/api/agent/tokens', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ perencanaanId, name: 'CLI local' })
+			});
+			const data = await response.json();
+			if (!response.ok) throw new Error(data.message ?? 'Gagal membuat akses proyek.');
+			apiKey = data.token;
+			tokenId = data.id;
+			await loadTokens();
+		} catch (cause) {
+			tokenError =
+				cause instanceof Error
+					? cause.message
+					: 'Koneksi terputus. Periksa daftar akses sebelum mencoba lagi.';
+		} finally {
+			busy = false;
+		}
+	}
 	async function revokeToken(id = tokenId) {
-		if (!id) return;
-		const response = await fetch('/api/agent/tokens', {
-			method: 'DELETE',
-			headers: { 'content-type': 'application/json' },
-			body: JSON.stringify({ id })
-		});
-		if (response.ok) {
+		if (!id || busy) return;
+		busy = true;
+		tokenError = '';
+		try {
+			const response = await fetch('/api/agent/tokens', {
+				method: 'DELETE',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ id })
+			});
+			if (!response.ok) throw new Error('Gagal mencabut akses. Coba lagi.');
 			if (id === tokenId) {
 				apiKey = '';
 				tokenId = '';
 			}
 			await loadTokens();
-		} else tokenError = (await response.json()).message ?? 'Gagal mencabut token';
+		} catch (cause) {
+			tokenError = cause instanceof Error ? cause.message : 'Periksa koneksi lalu coba lagi.';
+		} finally {
+			busy = false;
+		}
 	}
-
-	function copy(t: string, key: string) {
-		navigator.clipboard.writeText(t);
-		copied = key;
-		setTimeout(() => (copied = null), 1500);
+	async function copy(text: string, key: string) {
+		try {
+			await navigator.clipboard.writeText(text);
+			copied = key;
+			setTimeout(() => {
+				if (copied === key) copied = null;
+			}, 2000);
+		} catch {
+			tokenError = 'Tidak bisa menyalin otomatis. Pilih teks perintah lalu salin secara manual.';
+		}
 	}
 
 	function shellQuote(value: string) {
@@ -84,13 +122,13 @@
 
 	const cmdAutopilot = $derived(
 		apiKey
-			? `npx menglabs-ngoding@latest autopilot --url ${shellQuote(apiBase || 'https://ngoding.menglabs.id')} --key ${shellQuote(apiKey)} --perencanaan ${shellQuote(perencanaanId)}`
+			? `npx menglabs-ngoding@latest autopilot --url ${shellQuote(apiBase || 'https://mager.menglabs.id')} --key ${shellQuote(apiKey)} --perencanaan ${shellQuote(perencanaanId)}`
 			: 'Buat token proyek untuk mendapatkan command autopilot'
 	);
 
 	const cmdInit = $derived(
 		apiKey
-			? `npx menglabs-ngoding@latest init --url ${apiBase || 'https://ngoding.menglabs.id'} --key ${apiKey} ${perencanaanId ? `--perencanaan ${perencanaanId}` : '--perencanaan <id>'} --global`
+			? `npx menglabs-ngoding@latest init --url ${apiBase || 'https://mager.menglabs.id'} --key ${apiKey} ${perencanaanId ? `--perencanaan ${perencanaanId}` : '--perencanaan <id>'} --global`
 			: 'Buat token agent terlebih dahulu'
 	);
 	const cmdTasks = $derived(
@@ -108,245 +146,126 @@
 	const cmdCustom = `npx menglabs-ngoding run --exec 'cursor-agent "{{title}}: {{description}}"' --poll 4`;
 </script>
 
-<svelte:head><title>Implementasi — pakai di local</title></svelte:head>
-
-<div class="min-h-screen bg-[#0a0f1f] px-4 py-6 text-white">
-	<div
-		class="pointer-events-none fixed inset-0"
-		style="background-image: radial-gradient(circle, rgba(255,255,255,0.14) 1px, transparent 1px); background-size:22px 22px; opacity:0.25"
-	></div>
-	<div class="relative mx-auto max-w-[860px]">
-		<button onclick={() => history.back()} class="text-xs text-[#64748b] hover:text-white"
-			>← Kembali</button
-		>
-		<h1 class="mt-3 text-2xl font-bold">Implementasi di Local</h1>
-		<p class="mt-1 text-sm text-[#94a3b8]">
-			Platform hosted → sync otomatis ke local. Bebas pakai agent CLI kamu: <code
-				class="rounded bg-[#1e293b] px-1.5 py-0.5 text-xs">claude</code
-			> <code class="rounded bg-[#1e293b] px-1.5 py-0.5 text-xs">antigravity</code>
-			<code class="rounded bg-[#1e293b] px-1.5 py-0.5 text-xs">cursor</code>
-			<code class="rounded bg-[#1e293b] px-1.5 py-0.5 text-xs">opencode</code>
+<svelte:head><title>Jalankan di komputer — mager</title></svelte:head>
+<div class="page-wrap narrow">
+	<p class="eyebrow">Dari rencana ke kode</p>
+	<h1 class="page-title">Kerjakan tugas dengan Claude</h1>
+	<p class="page-intro">
+		Buka folder proyek di komputermu, lalu jalankan perintah di bawah. Claude mengambil rencana dan
+		mengerjakan tugas satu per satu.
+	</p>
+	<details class="surface mt-6">
+		<summary>Persiapan pertama kali</summary>
+		<ol class="list-decimal space-y-3 pl-5 text-sm text-slate-300">
+			<li>
+				Pastikan Node.js dan npm tersedia. Cek dengan <code>node --version</code> dan
+				<code>npm --version</code> di terminal.
+			</li>
+			<li>
+				Pastikan Claude Code sudah terpasang dan masuk ke akun. Jalankan <code>claude</code> untuk memeriksanya.
+			</li>
+			<li>
+				Buka terminal di folder tempat kode aplikasi akan dibuat. Di VS Code, buka folder tersebut,
+				lalu pilih menu Terminal → New Terminal.
+			</li>
+		</ol>
+	</details>
+	{#if tokenError}<div class="notice" role="alert">
+			<p>{tokenError}</p>
+			{#if !projects.length}<button class="secondary-button mt-3" onclick={initialize}
+					>Coba muat lagi</button
+				>{/if}
+		</div>{/if}
+	<section class="surface mt-6">
+		<h2 class="text-lg font-semibold">1. Pilih proyek</h2>
+		{#if loading}<p role="status" class="help-text">
+				Memuat proyek…
+			</p>{:else if !projects.length && !tokenError}<p class="help-text">
+				Buat rencana proyek terlebih dahulu.
+			</p>
+			<a href="/create" class="primary-button mt-4">Buat proyek</a>{:else}
+			<label for="run-project" class="field-label mt-4">Proyek yang akan dikerjakan</label>
+			<select
+				id="run-project"
+				class="field"
+				bind:value={perencanaanId}
+				onchange={selectProject}
+				disabled={busy}
+				><option value="">Pilih proyek…</option>{#each projects as project}<option
+						value={project.id}>{project.title}</option
+					>{/each}</select
+			>
+		{/if}
+	</section>
+	<section class="surface mt-4">
+		<h2 class="text-lg font-semibold">2. Buat dan salin perintah</h2>
+		<p class="help-text">Perintah memberi agent akses ke proyek yang kamu pilih selama 30 hari.</p>
+		{#if !apiKey}<button
+				class="primary-button mt-4"
+				disabled={!perencanaanId || busy || loading}
+				onclick={createToken}
+				>{busy ? 'Menyiapkan perintah…' : 'Buat perintah untuk proyek ini'}</button
+			>{:else}
+			<code class="command">{cmdAutopilot}</code>
+			<div class="action-row">
+				<button class="primary-button" onclick={() => copy(cmdAutopilot, 'autopilot')}
+					>{copied === 'autopilot' ? 'Tersalin' : 'Salin perintah'}</button
+				>
+			</div>
+			<p role="status" class="help-text">
+				Salin sebelum meninggalkan halaman. Perintah ini berisi kunci akses proyek.
+			</p>
+		{/if}
+	</section>
+	<section class="surface mt-4">
+		<h2 class="text-lg font-semibold">3. Tempel di terminal, lalu tekan Enter</h2>
+		<p class="help-text">
+			Jalankan dari folder proyek. Ikuti permintaan izin dari Claude. Status tugas akan diperbarui
+			di papan tugas.
 		</p>
-
-		<div class="mt-6 rounded-2xl border border-[#f97316]/60 bg-[#2a1b16] p-5">
-			<div class="flex items-center justify-between gap-3">
+		<p class="help-text">
+			Jika tugas gagal, proses berhenti dan tugas kembali ke “Siap dikerjakan”. Periksa pesan di
+			terminal sebelum menjalankan ulang.
+		</p>
+		{#if perencanaanId}<a
+				href={`/kanban?perencanaanId=${perencanaanId}`}
+				class="secondary-button mt-4">Pantau papan tugas →</a
+			>{/if}
+	</section>
+	<details class="surface mt-6">
+		<summary>Opsi lanjutan dan agent lain</summary>
+		<p class="help-text">Untuk menjalankan perintah terpisah, hubungkan proyek terlebih dahulu.</p>
+		{#each [{ title: 'Hubungkan proyek', text: cmdInit, key: 'init' }, { title: 'Lihat tugas siap dikerjakan', text: cmdTasks, key: 'tasks' }, { title: 'Ambil satu tugas', text: cmdClaim, key: 'claim' }, { title: 'Jalankan Claude Code', text: cmdClaude, key: 'claude' }, { title: 'Jalankan Antigravity', text: cmdAnti, key: 'anti' }, { title: 'Agent dengan perintah sendiri', text: cmdCustom, key: 'custom' }] as command}
+			<div class="mt-5">
+				<h3 class="text-sm font-semibold">{command.title}</h3>
+				<code class="command">{command.text}</code><button
+					class="secondary-button mt-2"
+					disabled={!apiKey}
+					onclick={() => copy(command.text, command.key)}
+					>{copied === command.key ? 'Tersalin' : 'Salin'}</button
+				>
+			</div>
+		{/each}
+	</details>
+	<details class="surface mt-4">
+		<summary>Kelola akses agent</summary>
+		<p class="help-text">
+			Cabut akses untuk memutus koneksi agent. Buat akses baru jika ingin menghubungkan kembali.
+		</p>
+		{#each tokens.filter((token) => !perencanaanId || token.perencanaanId === perencanaanId) as token}<div
+				class="action-row justify-between border-t border-slate-700 pt-4"
+			>
 				<div>
-					<h2 class="text-sm font-bold text-[#fb923c]">Satu command: Claude kerjakan semuanya</h2>
-					<p class="mt-1 text-xs text-[#cbd5e1]">
-						Jalankan dari folder repository. CLI mengambil PRD dan task, lalu berhenti saat antrean
-						selesai.
+					<p class="text-sm">
+						{projects.find((project) => project.id === token.perencanaanId)?.title ?? 'Proyek'} · {token.name}
+					</p>
+					<p class="help-text">
+						Berlaku sampai {new Date(token.expiresAt).toLocaleDateString('id-ID')}
 					</p>
 				</div>
-				<button
-					onclick={() => copy(cmdAutopilot, 'autopilot')}
-					disabled={!apiKey}
-					class="rounded-xl bg-[#f97316] px-4 py-2 text-xs font-semibold text-white disabled:opacity-40"
-					>{copied === 'autopilot' ? 'Copied ✓' : 'Copy'}</button
+				<button class="secondary-button" disabled={busy} onclick={() => revokeToken(token.id)}
+					>Cabut akses</button
 				>
-			</div>
-			<div class="mt-3 overflow-auto rounded-xl bg-[#0a0f1f] p-3 font-mono text-xs leading-relaxed">
-				{cmdAutopilot}
-			</div>
-			<p class="mt-2 text-xs text-[#94a3b8]">
-				Syarat: <code>claude</code> sudah terpasang dan login. Jika satu task gagal, proses berhenti dan
-				task dikembalikan ke todo.
-			</p>
-		</div>
-
-		<div class="mt-6 rounded-2xl border border-[#1e293b] bg-[#151c2f]/80 p-5">
-			<h2 class="text-sm font-bold">1. Install (sekali)</h2>
-			<div class="mt-2 rounded-xl bg-[#0a0f1f] p-3 font-mono text-xs">
-				<span class="text-[#64748b]">$</span> npx menglabs-ngoding@latest --help
-			</div>
-			<p class="mt-2 text-xs text-[#64748b]">
-				Tidak perlu install global — pakai npx tiap kali juga bisa. Atau <code
-					>npm i -g menglabs-ngoding</code
-				>
-			</p>
-		</div>
-
-		<div class="mt-4 rounded-2xl border border-[#1e293b] bg-[#151c2f]/80 p-5">
-			<div class="flex items-center justify-between">
-				<h2 class="text-sm font-bold">2. Connect ke platform hosted</h2>
-				<button
-					onclick={() => copy(cmdInit, 'init')}
-					class="rounded-full bg-[#1e293b] px-3 py-1 text-xs"
-					>{copied === 'init' ? 'Copied ✓' : 'Copy'}</button
-				>
-			</div>
-			<button
-				onclick={createToken}
-				class="mt-3 rounded-xl bg-[#c45a36] px-4 py-2 text-xs font-semibold"
-				>Buat token proyek (berlaku 30 hari)</button
-			>
-			{#if tokenError}<p class="mt-2 text-xs text-red-300">{tokenError}</p>{/if}
-			{#if apiKey}<p class="mt-2 text-xs text-amber-200">
-					Salin sekarang. Token hanya ditampilkan pada sesi halaman ini dan dapat dibatasi ke proyek {perencanaanId.slice(
-						0,
-						8
-					)}.
-				</p>{/if}
-			{#if tokenId}<button
-					onclick={() => revokeToken()}
-					class="mt-2 rounded-lg border border-red-900 px-3 py-1 text-xs text-red-300"
-					>Cabut token ini</button
-				>{/if}
-			<div class="mt-2 overflow-auto rounded-xl bg-[#0a0f1f] p-3 font-mono text-xs leading-relaxed">
-				{cmdInit}
-			</div>
-			{#if tokens.length}
-				<div class="mt-3 space-y-2">
-					<p class="text-xs font-semibold text-[#94a3b8]">Token aktif</p>
-					{#each tokens as token (token.id)}
-						<div
-							class="flex items-center gap-2 rounded-lg border border-[#2a3958] bg-[#0f172a] px-3 py-2 text-xs"
-						>
-							<div class="min-w-0 flex-1">
-								<p class="truncate font-medium">{token.name}</p>
-								<p class="text-[10px] text-[#64748b]">
-									proyek {token.perencanaanId.slice(0, 8)} · kedaluwarsa
-									{new Date(token.expiresAt).toLocaleDateString('id-ID')}
-								</p>
-							</div>
-							<button
-								onclick={() => revokeToken(token.id)}
-								class="rounded-lg border border-red-900 px-2 py-1 text-[11px] text-red-300"
-								>Cabut</button
-							>
-						</div>
-					{/each}
-				</div>
-			{/if}
-			<details class="mt-2 text-xs text-[#64748b]">
-				<summary class="cursor-pointer">Alternatif pakai env (tanpa file)</summary>
-				<pre class="mt-2 rounded bg-[#0a0f1f] p-3">export MENGLABS_API={apiBase ||
-						'https://ngoding.menglabs.id'}
-export MENGLABS_KEY={apiKey}
-export MENGLABS_PERENCANAAN={perencanaanId || '<id>'}</pre>
-			</details>
-			<button
-				onclick={() => copy(cmdInit, 'init2')}
-				class="mt-2 text-xs text-[#f97316] hover:underline"
-				>Verifikasi: npx menglabs-ngoding config → npx menglabs-ngoding sync</button
-			>
-		</div>
-
-		<div class="mt-4 rounded-2xl border border-[#1e293b] bg-[#151c2f]/80 p-5">
-			<h2 class="text-sm font-bold">3. Lihat tasks (kanban sync)</h2>
-			<div class="mt-2 flex gap-2">
-				<div class="flex-1 overflow-auto rounded-xl bg-[#0a0f1f] p-3 font-mono text-xs">
-					{cmdTasks}
-				</div>
-				<button onclick={() => copy(cmdTasks, 'tasks')} class="rounded-xl bg-[#1e293b] px-3 text-xs"
-					>{copied === 'tasks' ? '✓' : 'Copy'}</button
-				>
-			</div>
-			<div class="mt-2 flex gap-2">
-				<div class="flex-1 overflow-auto rounded-xl bg-[#0a0f1f] p-3 font-mono text-xs">
-					{cmdClaim} <span class="text-[#64748b]"># claim 1 todo → doing</span>
-				</div>
-				<button onclick={() => copy(cmdClaim, 'claim')} class="rounded-xl bg-[#1e293b] px-3 text-xs"
-					>{copied === 'claim' ? '✓' : 'Copy'}</button
-				>
-			</div>
-			<p class="mt-2 text-xs text-[#64748b]">
-				Tasks auto masuk DB via <code>POST /api/plan</code> & <code>POST /api/tasks</code> dengan
-				<code>status=todo</code>. Claim atomik <code>POST /api/agent/tasks</code> ubah jadi
-				<code>doing</code>.
-			</p>
-		</div>
-
-		<div class="mt-4 rounded-2xl border border-[#c45a36]/40 bg-[#1e293b]/80 p-5">
-			<h2 class="text-sm font-bold">4. Auto kerja — bebas pakai agent CLI kamu</h2>
-			<p class="mt-1 text-xs text-[#94a3b8]">
-				Poll todo → claim (todo→doing) → jalankan command kamu per task → sukses set done, gagal
-				balik todo. Template vars: <code class="rounded bg-[#0a0f1f] px-1">{'{{title}}'}</code>
-				<code class="rounded bg-[#0a0f1f] px-1">{'{{description}}'}</code>
-				<code class="rounded bg-[#0a0f1f] px-1">{'{{id}}'}</code>
-				— env <code>TASK_TITLE/TASK_DESC/TASK_JSON</code> juga diset.
-			</p>
-
-			<div class="mt-3 space-y-3">
-				<div>
-					<p class="text-xs font-semibold text-[#f97316]">Claude Code</p>
-					<div class="mt-1 flex gap-2">
-						<div class="flex-1 overflow-auto rounded-xl bg-[#0a0f1f] p-3 font-mono text-xs">
-							{cmdClaude}
-						</div>
-						<button
-							onclick={() => copy(cmdClaude, 'claude')}
-							class="rounded-xl bg-[#1e293b] px-3 text-xs"
-							>{copied === 'claude' ? '✓' : 'Copy'}</button
-						>
-					</div>
-				</div>
-				<div>
-					<p class="text-xs font-semibold text-[#22c55e]">Antigravity</p>
-					<div class="mt-1 flex gap-2">
-						<div class="flex-1 overflow-auto rounded-xl bg-[#0a0f1f] p-3 font-mono text-xs">
-							{cmdAnti}
-						</div>
-						<button
-							onclick={() => copy(cmdAnti, 'anti')}
-							class="rounded-xl bg-[#1e293b] px-3 text-xs"
-							>{copied === 'anti' ? '✓' : 'Copy'}</button
-						>
-					</div>
-				</div>
-				<div>
-					<p class="text-xs font-semibold text-[#94a3b8]">Custom / Cursor / Opencode</p>
-					<div class="mt-1 flex gap-2">
-						<div class="flex-1 overflow-auto rounded-xl bg-[#0a0f1f] p-3 font-mono text-xs">
-							{cmdCustom}
-						</div>
-						<button
-							onclick={() => copy(cmdCustom, 'custom')}
-							class="rounded-xl bg-[#1e293b] px-3 text-xs"
-							>{copied === 'custom' ? '✓' : 'Copy'}</button
-						>
-					</div>
-				</div>
-			</div>
-			<details class="mt-3 rounded-xl bg-[#0a0f1f] p-3 text-xs">
-				<summary class="cursor-pointer font-semibold">Opsi run lengkap</summary>
-				<pre class="mt-2 overflow-auto text-[#94a3b8]">npx menglabs-ngoding run --help
-  --perencanaan &lt;id&gt;   filter 1 perencanaan (default all)
-  --exec "&lt;cmd&gt;"       command template
-	  --agent claude|antigravity|cursor|opencode
-	  --verify "&lt;cmd&gt;"     command verifikasi opsional
-  --poll 4               interval detik
-  --once                 hanya 1 task lalu exit
-  --dry                  tidak ubah status, hanya print</pre>
-			</details>
-		</div>
-
-		<div
-			class="mt-4 rounded-2xl border border-[#1e293b] bg-[#0f172a] p-4 text-xs leading-relaxed text-[#64748b]"
-		>
-			<p class="font-semibold text-[#94a3b8]">API langsung (tanpa CLI)</p>
-			<pre
-				class="mt-2 overflow-auto rounded bg-[#0a0f1f] p-3 font-mono text-[11px]">curl -H "Authorization: Bearer &lt;project-token&gt;" {apiBase}/api/agent/tasks?status=todo | jq
-curl -X POST -H "Authorization: Bearer &lt;project-token&gt;" -d '&#123;"perencanaanId":"&lt;id&gt;","claim":true&#125;' {apiBase}/api/agent/tasks
-curl -X PATCH -H "Authorization: Bearer &lt;project-token&gt;" -d '&#123;"id":"&lt;taskId&gt;","status":"done","claimToken":"&lt;claim-token&gt;"&#125;' {apiBase}/api/agent/tasks</pre>
-		</div>
-
-		<div class="mt-6 flex gap-2">
-			<button
-				onclick={() => goto(`/kanban${perencanaanId ? `?perencanaanId=${perencanaanId}` : ''}`)}
-				class="flex-1 rounded-xl bg-[#c45a36] py-2.5 text-sm font-semibold hover:bg-[#d06a47]"
-				>Buka Kanban</button
-			>
-			<button
-				onclick={() => goto('/detail')}
-				class="flex-1 rounded-xl border border-[#2a3958] bg-[#1e293b] py-2.5 text-sm"
-				>Detail DB</button
-			>
-		</div>
-	</div>
+			</div>{:else}<p class="help-text">Belum ada akses aktif untuk proyek ini.</p>{/each}
+	</details>
 </div>
-
-<style>
-	:global(body) {
-		background: #0a0f1f;
-	}
-</style>

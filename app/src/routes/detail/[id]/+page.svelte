@@ -40,17 +40,27 @@
 	let error = $state('');
 	let pendingTaskId = $state<string | null>(null);
 
-	onMount(async () => {
-		const id = $page.params.id;
-		const res = await fetch(`/api/perencanaan/${id}`);
-		if (!res.ok) {
-			error = await res.text();
-			loading = false;
-			return;
-		}
-		data = await res.json();
-		loading = false;
+	onMount(() => {
+		void load();
 	});
+	async function load() {
+		loading = true;
+		error = '';
+		try {
+			const response = await fetch(`/api/perencanaan/${$page.params.id}`);
+			if (!response.ok)
+				throw new Error(
+					response.status === 404
+						? 'Proyek tidak ditemukan.'
+						: 'Detail proyek belum bisa dimuat. Coba lagi.'
+				);
+			data = await response.json();
+		} catch (cause) {
+			error = cause instanceof Error ? cause.message : 'Periksa koneksi lalu coba lagi.';
+		} finally {
+			loading = false;
+		}
+	}
 
 	async function moveTask(id: string, status: string) {
 		if (pendingTaskId) return;
@@ -80,9 +90,11 @@
 		if (!resultJson) return '';
 		try {
 			const result = JSON.parse(resultJson);
-			return result.verification?.status === 'passed' ? 'verified' : 'executed · unverified';
+			return result.verification?.status === 'passed'
+				? 'Lulus pemeriksaan'
+				: 'Dijalankan, belum diperiksa';
 		} catch {
-			return 'executed';
+			return 'Sudah dijalankan';
 		}
 	}
 </script>
@@ -98,34 +110,30 @@
 		<button onclick={() => goto('/detail')} class="text-xs text-[#64748b] hover:text-white"
 			>← Semua perencanaan</button
 		>
-		{#if loading}<p class="mt-6 text-sm text-[#94a3b8]">Loading DB...</p>{/if}
+		{#if loading}<p class="mt-6 text-sm text-[#94a3b8]">Memuat detail proyek…</p>{/if}
 		{#if error}<div
 				class="mt-6 rounded-xl border border-red-900/50 bg-red-950/40 px-4 py-3 text-sm text-red-200"
 			>
-				{error}
+				{error}<button class="secondary-button mt-3" onclick={load}>Coba lagi</button>
 			</div>{/if}
 		{#if data}
 			<div class="mt-3 rounded-2xl border border-[#2a3958] bg-[#151c2f]/80 p-5">
-				<p class="text-[11px] font-semibold tracking-widest text-[#c45a36]">
-					PERENCANAAN · DB {data.perencanaan.id.slice(0, 8)}
-				</p>
+				<p class="text-[11px] font-semibold tracking-widest text-[#c45a36]">RENCANA PROYEK</p>
 				<h1 class="mt-1 text-xl font-bold">{data.perencanaan.title}</h1>
 				<p class="mt-1 text-sm text-[#94a3b8]">{data.perencanaan.description}</p>
 				<p class="mt-2 text-xs text-[#475569]">
 					Prompt: "{data.perencanaan.prompt}" · {data.perencanaan.lang} · {data.perencanaan
 						.techMode}
 				</p>
-				<div class="mt-3 flex gap-2 text-xs">
+				<div class="mt-3 flex flex-wrap gap-2 text-xs">
 					<span class="rounded-full bg-[#1e293b] px-2.5 py-1">{data.counts.fitur} fitur</span>
 					<span class="rounded-full bg-[#1e293b] px-2.5 py-1">{data.counts.subFitur} sub fitur</span
 					>
-					<span class="rounded-full bg-[#1e293b] px-2.5 py-1"
-						>{data.counts.tasks} tasks di kanban_task</span
-					>
+					<span class="rounded-full bg-[#1e293b] px-2.5 py-1">{data.counts.tasks} tugas</span>
 					<button
 						onclick={() => data && goto(`/implementasi?perencanaanId=${data.perencanaan.id}`)}
 						class="ml-auto rounded-full border border-[#f97316]/50 bg-[#f97316]/10 px-3 py-1 text-[#f97316]"
-						>⚡ Implementasi</button
+						>Jalankan di komputer</button
 					>
 					<button
 						onclick={() => {
@@ -150,7 +158,7 @@
 									<p class="text-[11px] text-[#64748b]">{s.description}</p>
 									{#if s.tasks.length === 0}
 										<p class="mt-2 text-[11px] text-amber-300">
-											Belum ada task — klik di Perencanaan untuk generate.
+											Belum ada tugas. Buka rencana untuk membuatnya.
 										</p>
 									{:else}
 										<div class="mt-2 space-y-1">
@@ -165,19 +173,21 @@
 																? 'bg-amber-400'
 																: 'bg-emerald-400'}"
 													></span>
-													<span class="flex-1 truncate text-[11px]">{t.title}</span>
+													<span class="min-w-0 flex-1 text-sm">{t.title}</span>
 													{#if resultLabel(t.resultJson)}<span class="text-[9px] text-emerald-300"
 															>{resultLabel(t.resultJson)}</span
 														>{/if}
 													<select
+														aria-label={`Status tugas ${t.title}`}
 														value={t.status}
 														disabled={pendingTaskId === t.id}
 														onchange={(e) => moveTask(t.id, (e.target as HTMLSelectElement).value)}
 														class="rounded bg-[#0f172a] px-1 py-0.5 text-[10px]"
 													>
-														<option value="backlog">backlog</option><option value="todo"
-															>todo</option
-														><option value="doing">doing</option><option value="done">done</option>
+														<option value="backlog">Nanti</option><option value="todo">todo</option
+														><option value="doing">Dikerjakan</option><option value="done"
+															>Selesai</option
+														>
 													</select>
 												</div>
 											{/each}
