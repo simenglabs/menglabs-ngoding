@@ -2,7 +2,7 @@
 
 ## Deployment target
 
-The application builds as a Node server through `@sveltejs/adapter-node`. Run the generated server behind HTTPS so production session cookies remain secure. `/api/health` is the liveness endpoint; `/api/ready` verifies database connectivity.
+The application uses `@sveltejs/adapter-vercel` with the Node.js 22 runtime. Keep the Vercel framework preset on SvelteKit and do not force a static `public` output directory. `/api/health` is the liveness endpoint; `/api/ready` verifies database connectivity.
 
 Required environment variables are `DATABASE_URL`, `DATABASE_AUTH_TOKEN`, and `LLM_API_KEY`. `LLM_BASE_URL`, `LLM_MODEL`, and `LLM_MAX_CONCURRENCY` (default `4`) are optional. Rate limits and LLM concurrency slots are stored in the shared database, so every Node instance enforces the same counters. `AGENT_API_KEY` is an optional break-glass administrator credential; normal agents use project-scoped tokens created from the Implementasi page.
 
