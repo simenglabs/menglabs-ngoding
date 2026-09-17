@@ -8,15 +8,20 @@ const SESSION_DAYS = 7;
 
 export async function hashPassword(password: string): Promise<string> {
 	const salt = crypto.randomBytes(16).toString('hex');
-	const hash = await new Promise<Buffer>((res, rej) => crypto.scrypt(password, salt, 64, (e, h) => (e ? rej(e) : res(h as Buffer))));
+	const hash = await new Promise<Buffer>((res, rej) =>
+		crypto.scrypt(password, salt, 64, (e, h) => (e ? rej(e) : res(h as Buffer)))
+	);
 	return `${salt}:${hash.toString('hex')}`;
 }
 
 export async function verifyPassword(stored: string, password: string): Promise<boolean> {
 	const [salt, hash] = stored.split(':');
 	if (!salt || !hash) return false;
-	const derived = await new Promise<Buffer>((res, rej) => crypto.scrypt(password, salt, 64, (e, h) => (e ? rej(e) : res(h as Buffer))));
-	return crypto.timingSafeEqual(Buffer.from(hash, 'hex'), derived);
+	const derived = await new Promise<Buffer>((res, rej) =>
+		crypto.scrypt(password, salt, 64, (e, h) => (e ? rej(e) : res(h as Buffer)))
+	);
+	const expected = Buffer.from(hash, 'hex');
+	return expected.length === derived.length && crypto.timingSafeEqual(expected, derived);
 }
 
 export async function createSession(userId: string) {

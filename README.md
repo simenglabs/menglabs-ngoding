@@ -2,7 +2,7 @@
 
 > **Svelte 5 + SvelteKit 2 + Tailwind 4 + Drizzle ORM + Turso (libSQL) + LLM Omni (OpenAI-compatible) + npx CLI sync**
 
-Platform untuk ubah ide jadi rencana yang bisa dipahami AI tools pilihanmu — dari prompt → pertanyaan klarifikasi (MCQ) → preferensi tech stack → perencanaan workflow n8n (geser card, garis bezier) → breakdown fitur → sub fitur → tasks auto masuk Kanban + DB Turso. Bebas pakai agent CLI lokal (Claude, Antigravity, Cursor, OpenCode) via `npx menglabs-ngoding`.
+Platform untuk ubah ide jadi rencana yang bisa dipahami AI tools pilihanmu — dari prompt → pertanyaan klarifikasi → preferensi tech stack → visualisasi perencanaan berbasis node → breakdown fitur → sub fitur → tasks auto masuk Kanban + DB Turso. Bebas pakai agent CLI lokal (Claude, Antigravity, Cursor, OpenCode) via `npx menglabs-ngoding`.
 
 **Live:** `http://localhost:5173` dev · Turso `libsql://menglabs-ngoding-menglabs.aws-ap-northeast-1.turso.io`
 
@@ -11,7 +11,7 @@ Platform untuk ubah ide jadi rencana yang bisa dipahami AI tools pilihanmu — d
 ## Arsitektur
 
 ```
-[Mau bikin apa?] → [Preferensi teknologi] → [Beberapa pertanyaan (LLM MCQ)] → [Perencanaan n8n + drag] → [Sub Fitur → Task (LLM)] → [Kanban (todo/doing/done)] → DB Turso + npx CLI
+[Mau bikin apa?] → [Preferensi teknologi] → [Pertanyaan LLM] → [Visualisasi node + drag] → [Sub Fitur → Task LLM] → [Kanban] → DB Turso + npx CLI
 ```
 
 - **Frontend:** Svelte 5 runes (`$state`, `$derived`, `$effect`), SvelteKit 2, Tailwind 4, Vite 8
@@ -29,13 +29,13 @@ Platform untuk ubah ide jadi rencana yang bisa dipahami AI tools pilihanmu — d
 | **Create Flow** | `GET /create` → `POST /api/plan` → `POST /api/tasks` → `kanban_task` |
 | **Clarify** | `POST /api/questions` → LLM MCQ 5 pertanyaan, `type=text|single|multi` |
 | **Tech** | `BIARKAN AI PILIH` vs `PILIH SENDIRI` (Frontend/Backend/DB/Deploy) |
-| **Workflow n8n** | Canvas dot grid, nodes `border-2 handle -right-7`, bezier `C` + arrow marker, drag `translate`, lines `getBoundingClientRect` dinamis, panel kanan Task List |
+| **Workflow visual** | Canvas dot grid, node dan garis bezier, drag atau tombol panah keyboard, panel Task List. Ini bukan integrasi n8n. |
 | **Kanban** | 4 kolom `backlog|todo|doing|done`, drag & drop `PATCH /api/kanban/[id]`, DB-backed jika `?perencanaanId=` |
 | **Detail DB** | `GET /api/perencanaan`, `GET /api/perencanaan/[id]` full tree, `GET /api/kanban?perencanaanId` |
 | **Implementasi** | `GET /implementasi` copy `npx` commands, API curl |
 | **Auth** | `POST /api/auth/register|login|logout`, `GET /api/auth/me`, `hooks.server.ts` cookie `menglabs_session`, Turso `user` + `session`, perencanaan filter by `userId` |
 | **Dashboard** | `GET /dashboard` recent projects, stats, link Kanban/Detail |
-| **Agent Sync** | `GET/POST/PATCH /api/agent/tasks?status=todo` → `Authorization: Bearer AGENT_API_KEY`, claim atomik todo→doing→done, CLI `run --exec` bebas agent |
+| **Agent Sync** | Token per proyek, conditional claim + lease, claim secret untuk completion, dan CLI tanpa evaluasi shell |
 
 ---
 
@@ -50,14 +50,14 @@ cd menglabs-ngoding
 cp app/.env.example app/.env
 # isi di app/.env:
 # DATABASE_URL=libsql://menglabs-ngoding-menglabs.aws-ap-northeast-1.turso.io
-# DATABASE_AUTH_TOKEN=eyJhbG...
+# DATABASE_AUTH_TOKEN=<turso-token>
 # LLM_BASE_URL=https://omni.menglabs.id/v1
 # LLM_API_KEY=sk-...
-# AGENT_API_KEY=sk-agent-local-2026
+# AGENT_API_KEY=                 # optional break-glass admin key
 
 # 3. Install & DB
 cd app && npm install
-npm run db:push          # drizzle-kit push → Turso
+npm run db:migrate       # migration SQL yang tersimpan di Git
 npm run dev -- --open    # http://localhost:5173
 
 # 4. CLI (local)
@@ -66,6 +66,8 @@ npx /Volumes/.../cli tasks --limit 2   # atau setelah publish:
 npx menglabs-ngoding@latest --help
 ```
 
+Database lama yang dibuat sebelum migration history memakai prosedur upgrade terpisah. Ikuti [runbook deployment](docs/OPERATIONS.md) dan uji pada hasil restore sebelum production.
+
 ---
 
 ## Turso (libSQL)
@@ -73,7 +75,7 @@ npx menglabs-ngoding@latest --help
 ```bash
 # app/drizzle.config.ts dialect:turso, url + authToken
 # push schema
-cd app && npm run db:push -- --force
+cd app && npm run db:migrate
 # studio
 npm run db:studio
 # Tables: user, session, perencanaan (userId FK), fitur, sub_fitur, kanban_task, task, todo
@@ -101,7 +103,7 @@ Package: `cli/package.json` → `name:menglabs-ngoding` `bin:menglabs-ngoding �
 
 ```bash
 # sync hosted ↔ local
-npx menglabs-ngoding@latest init --url https://ngoding.menglabs.id --key sk-agent-local-2026 --perencanaan <id> --global
+npx menglabs-ngoding@latest init --url https://ngoding.menglabs.id --key '<project-token>' --perencanaan <id> --global
 npx menglabs-ngoding config
 npx menglabs-ngoding sync
 
@@ -112,24 +114,25 @@ npx menglabs-ngoding done <taskId>              # doing → done
 npx menglabs-ngoding perencanaan                # list perencanaan
 
 # bebas pakai agent CLI kamu — auto poll todo→doing→done
+npx menglabs-ngoding@latest autopilot --url 'https://ngoding.menglabs.id' --key '<project-token>' --perencanaan '<id>'
 npx menglabs-ngoding run --exec 'npx @anthropic-ai/claude-code -p "kerjakan {{title}}: {{description}}"' --perencanaan <id>
 npx menglabs-ngoding run --agent antigravity --perencanaan <id>
 npx menglabs-ngoding run --exec 'cursor-agent "{{title}}"' --once --dry
 
 # env alt (tanpa file)
 export MENGLABS_API=https://ngoding.menglabs.id
-export MENGLABS_KEY=sk-agent-local-2026
+export MENGLABS_KEY='<project-token>'
 export MENGLABS_PERENCANAAN=<id>
 npx menglabs-ngoding tasks
 ```
 
-Template vars: `{{title}} {{description}} {{id}} {{fitur}} {{subFitur}}` + env `TASK_ID/TASK_TITLE/TASK_DESC/TASK_JSON`
+`autopilot` mengambil PRD terbaru dan konteks task, menjalankan Claude sampai todo habis, lalu exit. Template vars: `{{title}} {{description}} {{id}} {{fitur}} {{subFitur}} {{prd}} {{context}}` + env `TASK_ID/TASK_TITLE/TASK_DESC/TASK_JSON`.
 
 API langsung:
 ```bash
-curl -H "Authorization: Bearer sk-agent-local-2026" "$API/api/agent/tasks?status=todo" | jq
-curl -X POST -H "Authorization: Bearer sk-agent-local-2026" -d '{"perencanaanId":"<id>","claim":true}' $API/api/agent/tasks
-curl -X PATCH -H "Authorization: Bearer sk-agent-local-2026" -d '{"id":"<taskId>","status":"done"}' $API/api/agent/tasks
+curl -H "Authorization: Bearer <project-token>" "$API/api/agent/tasks?status=todo" | jq
+curl -X POST -H "Authorization: Bearer <project-token>" -d '{"perencanaanId":"<id>","claim":true}' $API/api/agent/tasks
+curl -X PATCH -H "Authorization: Bearer <project-token>" -d '{"id":"<taskId>","status":"done","claimToken":"<claim-token>"}' $API/api/agent/tasks
 ```
 
 Publish:
@@ -151,7 +154,7 @@ Local dev tanpa publish: `npx /path/to/cli --help`
 | `GET /create` | Mau bikin apa? (prompt + referensi + bahasa) |
 | `GET /preferensi` | Pilih tech (AI vs manual) |
 | `GET /pertanyaan` | 5 MCQ dari LLM |
-| `GET /perencanaan` | Workflow n8n, geser card, sub→task panel kanan |
+| `GET /perencanaan` | Visualisasi node, geser card, sub→task panel kanan |
 | `GET /kanban?perencanaanId=` | Kanban 4 kolom DB |
 | `GET /detail` | List perencanaan DB |
 | `GET /detail/[id]` | Tree fitur→sub→tasks |
@@ -168,11 +171,11 @@ API: `POST /api/plan`, `POST /api/questions`, `POST /api/tasks`, `GET /api/peren
 ```env
 # app/.env
 DATABASE_URL=libsql://menglabs-ngoding-menglabs.aws-ap-northeast-1.turso.io
-DATABASE_AUTH_TOKEN=eyJhbGciOi...
+DATABASE_AUTH_TOKEN=<turso-token>
 LLM_BASE_URL=https://omni.menglabs.id/v1
-LLM_API_KEY=sk-43ffab...
+LLM_API_KEY=<llm-api-key>
 LLM_MODEL=antigravity/claude-opus-4-6-thinking
-AGENT_API_KEY=sk-agent-local-2026
+AGENT_API_KEY=
 ```
 
 Set di hosting juga (Vercel/Cloudflare/Node env).

@@ -1,213 +1,190 @@
 import { json } from '@sveltejs/kit';
-import { env } from '$env/dynamic/private';
 import { db } from '$lib/server/db';
 import { perencanaan, fitur, subFitur, kanbanTask } from '$lib/server/db/schema';
+import { requireUser, readJson, requiredString } from '$lib/server/http';
+import { rateLimit } from '$lib/server/rateLimit';
+import { chatCompletion, LlmError, parseJsonObject } from '$lib/server/llm';
 import type { RequestHandler } from './$types';
 
-const SYSTEM = `Kamu adalah planner untuk breakdown proyek. Dari ide user + jawaban klarifikasi + tech stack, buat hierarki terstruktur:
-
-PERENCANAAN -> FITUR (3-4) -> SUB FITUR (2-4 per fitur) -> TASK (3-5 per sub fitur untuk pertama: hanya 1 contoh sub fitur, sisanya kosongkan tasks=[] agar user bisa expand nanti).
-
-Output HARUS JSON valid saja tanpa markdown / fence.
-
-Format:
-{
-  "perencanaan": {"title":"string","description":"string singkat 1 kalimat"},
-  "fiturs": [
-    {
-      "id":"fitur-1",
-      "title":"Fitur A",
-      "description":"deskripsi 1 kalimat",
-      "subFiturs":[
-        {"id":"sub-1-1","title":"Sub A1","description":"...","tasks":[
-          {"id":"task-1-1-1","title":"Task","description":"...","priority":"high|medium|low","estimate":"2h|1d"}
-        ]}
-      ]
-    }
-  ]
-}
-
-Bahasa sesuai permintaan (default Indonesia). Judul fitur/sub fitur konkret, tidak generik "Fitur 1".`;
-
-export const POST: RequestHandler = async ({ request, cookies }) => {
-	const { prompt, lang, techMode, techStack, questions, answers } = await request.json();
-	// ambil userId jika login (Turso)
-	let userId: string | null = null;
-	try {
-		const { getUserBySession, COOKIE_NAME } = await import('$lib/server/auth');
-		const sid = cookies.get(COOKIE_NAME);
-		if (sid) {
-			const u = await getUserBySession(sid);
-			if (u) userId = u.id;
-		}
-	} catch {}
-	if (!prompt || typeof prompt !== 'string' || !prompt.trim()) return json({ message: 'prompt required' }, { status: 400 });
-
-	const baseUrl = env.LLM_BASE_URL ?? 'https://omni.menglabs.id/v1';
-	const apiKey = env.LLM_API_KEY;
-	const model = env.LLM_MODEL ?? 'antigravity/claude-opus-4-6-thinking';
-	if (!apiKey) return json({ message: 'LLM_API_KEY not set' }, { status: 500 });
-
-	const langInstruct = lang === 'English' ? 'Gunakan Bahasa Inggris.' : lang === '日本語' ? 'Gunakan Bahasa Jepang.' : 'Gunakan Bahasa Indonesia.';
-	const techInfo =
-		techMode === 'manual' && techStack
-			? `Tech stack: ${Object.entries(techStack).filter(([, v]) => v).map(([k, v]) => `${k}=${v}`).join(', ')}`
-			: techMode === 'ai'
-				? 'Tech stack biarkan AI pilih.'
-				: '';
-
-	let qa = '';
-	if (Array.isArray(questions) && answers) {
-		const qMap = new Map((questions as { id: number; text: string }[]).map((q) => [q.id, q.text]));
-		const lines = Object.entries(answers as Record<string, string | string[]>)
-			.map(([id, ans]) => {
-				const qText = qMap.get(Number(id)) ?? `Q${id}`;
-				const aText = Array.isArray(ans) ? ans.join(', ') : String(ans);
-				if (!aText.trim()) return null;
-				return `Q: ${qText}\nA: ${aText}`;
-			})
-			.filter(Boolean)
-			.join('\n');
-		if (lines) qa = `Jawaban klarifikasi:\n${lines}`;
-	}
-
-	const userContent = `${langInstruct} ${techInfo} ${qa}\n\nIde: """${prompt.trim()}"""\nOutput JSON hierarki.`;
-
-	try {
-		const resp = await fetch(`${baseUrl}/chat/completions`, {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-			body: JSON.stringify({
-				model,
-				stream: false,
-				max_tokens: 4000,
-				temperature: 0.6,
-				messages: [
-					{ role: 'system', content: SYSTEM },
-					{ role: 'user', content: userContent }
-				]
-			})
-		});
-
-		if (!resp.ok) {
-			const err = await resp.text();
-			console.error('plan LLM error', resp.status, err);
-			return json({ message: `LLM error ${resp.status}`, detail: err.slice(0, 1000) }, { status: 502 });
-		}
-
-		const data = await resp.json();
-		let content: string = data.choices?.[0]?.message?.content ?? '';
-		content = content.trim().replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/i, '').trim();
-
-		let parsed: unknown;
-		try {
-			parsed = JSON.parse(content);
-		} catch {
-			const m = content.match(/\{[\s\S]*\}/);
-			if (m) parsed = JSON.parse(m[0]);
-			else throw new Error('JSON parse failed: ' + content.slice(0, 600));
-		}
-
-		const p = parsed as Record<string, unknown>;
-		// light validation
-		if (!p.perencanaan || !Array.isArray(p.fiturs)) throw new Error('invalid shape');
-
-		// === Persist ke DB: perencanaan -> fitur -> subFitur -> kanban_task ===
-		const per = p.perencanaan as { title: string; description: string };
-		const fiturs = p.fiturs as Array<{
-			id: string;
-			title: string;
-			description: string;
-			subFiturs: Array<{ id: string; title: string; description: string; tasks?: Array<{ id: string; title: string; description: string; priority: string; estimate: string }> }>;
-		}>;
-
-		const [perRow] = await db
-			.insert(perencanaan)
-			.values({
-				userId: userId ?? null,
-				title: per.title,
-				description: per.description,
-				prompt: prompt.trim(),
-				lang: lang ?? 'Bahasa Indonesia',
-				techMode: techMode ?? null,
-				techStackJson: techStack ? JSON.stringify(techStack) : null,
-				questionsJson: questions ? JSON.stringify(questions) : null,
-				answersJson: answers ? JSON.stringify(answers) : null
-			})
-			.returning();
-
-		const insertedPlan: typeof parsed & { dbId: string } = { ...(parsed as object), dbId: perRow.id } as typeof parsed & { dbId: string };
-
-		for (let i = 0; i < fiturs.length; i++) {
-			const f = fiturs[i];
-			const [fRow] = await db
-				.insert(fitur)
-				.values({
-					id: crypto.randomUUID(),
-					perencanaanId: perRow.id,
-					title: f.title,
-					description: f.description,
-					orderIdx: i
-				})
-				.returning();
-			// update id untuk referensi sub
-			for (let j = 0; j < (f.subFiturs ?? []).length; j++) {
-				const s = f.subFiturs[j];
-				const [sRow] = await db
-					.insert(subFitur)
-					.values({
-						id: crypto.randomUUID(),
-						fiturId: fRow.id,
-						perencanaanId: perRow.id,
-						title: s.title,
-						description: s.description,
-						orderIdx: j
-					})
-					.returning();
-				// tasks awal (jika ada contoh)
-				for (const t of s.tasks ?? []) {
-					await db.insert(kanbanTask).values({
-						id: crypto.randomUUID(),
-						subFiturId: sRow.id,
-						fiturId: fRow.id,
-						perencanaanId: perRow.id,
-						title: t.title,
-						description: t.description,
-						priority: t.priority ?? 'medium',
-						estimate: t.estimate ?? '1d',
-						status: 'todo'
-					});
-				}
-			}
-		}
-
-		return json({ plan: parsed, dbId: perRow.id, insertedPlan, usage: data.usage }, { status: 200 });
-	} catch (e) {
-		console.error(e);
-		const fallback = {
-			perencanaan: { title: 'Perencanaan MVP', description: prompt.slice(0, 60) },
-			fiturs: [
-				{ id: 'fitur-1', title: 'Autentikasi & Onboarding', description: 'Login dan setup awal', subFiturs: [{ id: 'sub-1-1', title: 'Login & Register', description: 'Form dan validasi', tasks: [{ id: 't1', title: 'Buat UI login', description: 'Form + error', priority: 'high', estimate: '1d' }] }, { id: 'sub-1-2', title: 'Onboarding flow', description: 'Tutorial awal', tasks: [] }] },
-				{ id: 'fitur-2', title: 'Manajemen Data Utama', description: 'CRUD entitas inti', subFiturs: [{ id: 'sub-2-1', title: 'List & Filter', description: 'Tampilkan data', tasks: [] }, { id: 'sub-2-2', title: 'Form Create/Edit', description: 'Validasi', tasks: [] }] },
-				{ id: 'fitur-3', title: 'Dashboard & Laporan', description: 'Visualisasi ringkasan', subFiturs: [{ id: 'sub-3-1', title: 'Dashboard ringkasan', description: 'Chart bulanan', tasks: [] }] }
-			]
-		};
-		// simpan fallback juga ke DB biar flow tetap jalan
-		try {
-			const [perRow] = await db.insert(perencanaan).values({ userId: userId ?? null, title: fallback.perencanaan.title, description: fallback.perencanaan.description, prompt: prompt.trim(), lang: lang ?? 'Bahasa Indonesia', techMode: techMode ?? null }).returning();
-			for (let i = 0; i < fallback.fiturs.length; i++) {
-				const f = fallback.fiturs[i];
-				const [fRow] = await db.insert(fitur).values({ perencanaanId: perRow.id, title: f.title, description: f.description, orderIdx: i }).returning();
-				for (let j = 0; j < f.subFiturs.length; j++) {
-					const s = f.subFiturs[j];
-					const [sRow] = await db.insert(subFitur).values({ fiturId: fRow.id, perencanaanId: perRow.id, title: s.title, description: s.description, orderIdx: j }).returning();
-					for (const t of s.tasks ?? []) await db.insert(kanbanTask).values({ subFiturId: sRow.id, fiturId: fRow.id, perencanaanId: perRow.id, title: t.title, description: t.description, priority: t.priority, estimate: t.estimate, status: 'todo' });
-				}
-			}
-			return json({ plan: fallback, dbId: (await db.select().from(perencanaan).orderBy(perencanaan.createdAt).limit(1).then(r=>r[0]))?.id, fallback: true, error: String(e).slice(0, 300) }, { status: 200 });
-		} catch {}
-		return json({ plan: fallback, fallback: true, error: String(e).slice(0, 300) }, { status: 200 });
-	}
+const SYSTEM = `Buat breakdown proyek sebagai JSON valid tanpa markdown: {"perencanaan":{"title":"...","description":"..."},"fiturs":[{"title":"...","description":"...","subFiturs":[{"title":"...","description":"...","tasks":[{"title":"...","description":"...","priority":"high|medium|low","estimate":"2h|1d"}]}]}]}. Buat 3-4 fitur dan 2-4 sub fitur per fitur. Tasks hanya untuk satu sub fitur pertama, lainnya array kosong. Bahasa mengikuti permintaan.`;
+type GeneratedTask = {
+	title: string;
+	description: string;
+	priority: 'high' | 'medium' | 'low';
+	estimate: string;
+};
+type GeneratedSub = { title: string; description: string; tasks: GeneratedTask[] };
+type GeneratedFeature = { title: string; description: string; subFiturs: GeneratedSub[] };
+type GeneratedPlan = {
+	perencanaan: { title: string; description: string };
+	fiturs: GeneratedFeature[];
 };
 
+function short(value: unknown, field: string, max = 500): string {
+	if (typeof value !== 'string' || !value.trim() || value.length > max)
+		throw new LlmError('INVALID_OUTPUT', `invalid ${field}`);
+	return value.trim();
+}
 
+function validatePlan(value: Record<string, unknown>): GeneratedPlan {
+	const plan = value.perencanaan as Record<string, unknown>;
+	if (
+		!plan ||
+		typeof plan !== 'object' ||
+		!Array.isArray(value.fiturs) ||
+		value.fiturs.length < 1 ||
+		value.fiturs.length > 6
+	)
+		throw new LlmError('INVALID_OUTPUT', 'invalid plan shape');
+	return {
+		perencanaan: {
+			title: short(plan.title, 'plan title', 200),
+			description: short(plan.description, 'plan description', 1000)
+		},
+		fiturs: value.fiturs.map((raw) => {
+			if (!raw || typeof raw !== 'object') throw new LlmError('INVALID_OUTPUT', 'invalid feature');
+			const feature = raw as Record<string, unknown>;
+			if (!Array.isArray(feature.subFiturs) || feature.subFiturs.length > 8)
+				throw new LlmError('INVALID_OUTPUT', 'invalid sub features');
+			return {
+				title: short(feature.title, 'feature title', 200),
+				description: short(feature.description, 'feature description', 1000),
+				subFiturs: feature.subFiturs.map((rawSub) => {
+					if (!rawSub || typeof rawSub !== 'object')
+						throw new LlmError('INVALID_OUTPUT', 'invalid sub feature');
+					const sub = rawSub as Record<string, unknown>;
+					const rawTasks = Array.isArray(sub.tasks) ? sub.tasks.slice(0, 8) : [];
+					return {
+						title: short(sub.title, 'sub feature title', 200),
+						description: short(sub.description, 'sub feature description', 1000),
+						tasks: rawTasks.map((rawTask) => {
+							if (!rawTask || typeof rawTask !== 'object')
+								throw new LlmError('INVALID_OUTPUT', 'invalid task');
+							const task = rawTask as Record<string, unknown>;
+							const priority = ['high', 'medium', 'low'].includes(String(task.priority))
+								? (String(task.priority) as GeneratedTask['priority'])
+								: 'medium';
+							return {
+								title: short(task.title, 'task title', 300),
+								description: short(task.description, 'task description', 2000),
+								priority,
+								estimate: short(task.estimate ?? '1d', 'estimate', 20)
+							};
+						})
+					};
+				})
+			};
+		})
+	};
+}
+
+export const POST: RequestHandler = async ({ request, locals }) => {
+	const current = requireUser(locals.user);
+	const limited = await rateLimit(`plan:${current.id}`, 10, 60 * 60_000);
+	if (limited) return limited;
+	const body = await readJson(request);
+	const prompt = requiredString(body, 'prompt', 20_000);
+	const lang = typeof body.lang === 'string' ? body.lang.slice(0, 50) : 'Bahasa Indonesia';
+	const techMode = body.techMode === 'manual' ? 'manual' : 'ai';
+	const context = `Bahasa: ${lang}\nMode stack: ${techMode}\nStack: ${JSON.stringify(body.techStack ?? {})}\nJawaban: ${JSON.stringify(body.answers ?? {})}\nIde: ${prompt}`;
+	try {
+		const completion = await chatCompletion(
+			[
+				{ role: 'system', content: SYSTEM },
+				{ role: 'user', content: context }
+			],
+			{ maxTokens: 4000, temperature: 0.6 }
+		);
+		const generated = validatePlan(parseJsonObject(completion.content));
+		const saved = await db.transaction(async (tx) => {
+			const [planRow] = await tx
+				.insert(perencanaan)
+				.values({
+					userId: current.id,
+					title: generated.perencanaan.title,
+					description: generated.perencanaan.description,
+					prompt,
+					lang,
+					techMode,
+					techStackJson: JSON.stringify(body.techStack ?? {}),
+					questionsJson: JSON.stringify(body.questions ?? []),
+					answersJson: JSON.stringify(body.answers ?? {})
+				})
+				.returning();
+			const output: GeneratedPlan & {
+				perencanaan: GeneratedPlan['perencanaan'] & { id: string };
+				fiturs: Array<
+					GeneratedFeature & {
+						id: string;
+						subFiturs: Array<
+							GeneratedSub & {
+								id: string;
+								tasks: Array<GeneratedTask & { id: string; status: string }>;
+							}
+						>;
+					}
+				>;
+			} = { perencanaan: { ...generated.perencanaan, id: planRow.id }, fiturs: [] };
+			for (const [featureIndex, generatedFeature] of generated.fiturs.entries()) {
+				const [featureRow] = await tx
+					.insert(fitur)
+					.values({
+						perencanaanId: planRow.id,
+						title: generatedFeature.title,
+						description: generatedFeature.description,
+						orderIdx: featureIndex
+					})
+					.returning();
+				const featureOut = {
+					...generatedFeature,
+					id: featureRow.id,
+					subFiturs: [] as Array<
+						GeneratedSub & {
+							id: string;
+							tasks: Array<GeneratedTask & { id: string; status: string }>;
+						}
+					>
+				};
+				for (const [subIndex, generatedSub] of generatedFeature.subFiturs.entries()) {
+					const [subRow] = await tx
+						.insert(subFitur)
+						.values({
+							fiturId: featureRow.id,
+							perencanaanId: planRow.id,
+							title: generatedSub.title,
+							description: generatedSub.description,
+							orderIdx: subIndex,
+							tasksGeneratedAt: generatedSub.tasks.length ? new Date() : null
+						})
+						.returning();
+					const taskOut: Array<GeneratedTask & { id: string; status: string }> = [];
+					for (const generatedTask of generatedSub.tasks) {
+						const [taskRow] = await tx
+							.insert(kanbanTask)
+							.values({
+								subFiturId: subRow.id,
+								fiturId: featureRow.id,
+								perencanaanId: planRow.id,
+								...generatedTask,
+								status: 'todo'
+							})
+							.returning();
+						taskOut.push({ ...generatedTask, id: taskRow.id, status: taskRow.status });
+					}
+					featureOut.subFiturs.push({ ...generatedSub, id: subRow.id, tasks: taskOut });
+				}
+				output.fiturs.push(featureOut);
+			}
+			return { id: planRow.id, plan: output };
+		});
+		return json({ plan: saved.plan, dbId: saved.id, usage: completion.usage }, { status: 201 });
+	} catch (cause) {
+		if (cause instanceof LlmError)
+			return json({ message: cause.message, code: cause.code }, { status: cause.status });
+		console.error('plan persistence failed', cause);
+		return json(
+			{ message: 'perencanaan tidak tersimpan', code: 'PERSISTENCE_FAILED' },
+			{ status: 500 }
+		);
+	}
+};

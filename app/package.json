@@ -10,6 +10,7 @@
 		"prepare": "svelte-kit sync || echo ''",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
+		"test": "npm run build && node --test test/*.test.js",
 		"lint": "prettier --check . && eslint .",
 		"format": "prettier --write .",
 		"db:push": "drizzle-kit push",
@@ -19,7 +20,7 @@
 	},
 	"devDependencies": {
 		"@eslint/js": "^10.0.1",
-		"@sveltejs/adapter-auto": "^7.0.1",
+		"@sveltejs/adapter-node": "^5.5.7",
 		"@sveltejs/kit": "^2.63.0",
 		"@sveltejs/vite-plugin-svelte": "^7.1.2",
 		"@tailwindcss/vite": "^4.3.0",
@@ -44,5 +45,11 @@
 	"dependencies": {
 		"@libsql/client": "^0.18.0",
 		"better-sqlite3": "^13.0.2"
+	},
+	"overrides": {
+		"cookie": "0.7.2",
+		"@esbuild-kit/core-utils": {
+			"esbuild": "0.25.12"
+		}
 	}
 }

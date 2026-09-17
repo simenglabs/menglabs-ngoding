@@ -1,30 +1,36 @@
 import { json } from '@sveltejs/kit';
 import { db } from '$lib/server/db';
-import { perencanaan, fitur, subFitur, kanbanTask } from '$lib/server/db/schema';
-import { desc, eq } from 'drizzle-orm';
+import { perencanaan, fitur, kanbanTask } from '$lib/server/db/schema';
+import { desc, eq, sql } from 'drizzle-orm';
+import { requireUser } from '$lib/server/http';
 import type { RequestHandler } from './$types';
 
-export const GET: RequestHandler = async ({ cookies }) => {
-	let userId: string | null = null;
-	try {
-		const { getUserBySession, COOKIE_NAME } = await import('$lib/server/auth');
-		const sid = cookies.get(COOKIE_NAME);
-		if (sid) {
-			const u = await getUserBySession(sid);
-			if (u) userId = u.id;
-		}
-	} catch {}
-	const where = userId ? eq(perencanaan.userId, userId) : undefined;
-	const rows = where
-		? await db.select().from(perencanaan).where(where).orderBy(desc(perencanaan.createdAt)).limit(20)
-		: await db.select().from(perencanaan).orderBy(desc(perencanaan.createdAt)).limit(20);
-	// enrich with counts
-	const enriched = await Promise.all(
-		rows.map(async (p) => {
-			const fiturs = await db.select().from(fitur).where(eq(fitur.perencanaanId, p.id));
-			const tasks = await db.select().from(kanbanTask).where(eq(kanbanTask.perencanaanId, p.id));
-			return { ...p, fiturCount: fiturs.length, taskCount: tasks.length, todoCount: tasks.filter((t) => t.status === 'todo').length };
+export const GET: RequestHandler = async ({ locals, url }) => {
+	const current = requireUser(locals.user);
+	const limit = Math.min(Math.max(Number(url.searchParams.get('limit') ?? 20) || 20, 1), 50);
+	const rows = await db
+		.select({
+			id: perencanaan.id,
+			userId: perencanaan.userId,
+			title: perencanaan.title,
+			description: perencanaan.description,
+			prompt: perencanaan.prompt,
+			lang: perencanaan.lang,
+			techMode: perencanaan.techMode,
+			techStackJson: perencanaan.techStackJson,
+			questionsJson: perencanaan.questionsJson,
+			answersJson: perencanaan.answersJson,
+			createdAt: perencanaan.createdAt,
+			fiturCount: sql<number>`count(distinct ${fitur.id})`,
+			taskCount: sql<number>`count(distinct ${kanbanTask.id})`,
+			todoCount: sql<number>`count(distinct case when ${kanbanTask.status} = 'todo' then ${kanbanTask.id} end)`
 		})
-	);
-	return json(enriched);
+		.from(perencanaan)
+		.leftJoin(fitur, eq(fitur.perencanaanId, perencanaan.id))
+		.leftJoin(kanbanTask, eq(kanbanTask.perencanaanId, perencanaan.id))
+		.where(eq(perencanaan.userId, current.id))
+		.groupBy(perencanaan.id)
+		.orderBy(desc(perencanaan.createdAt))
+		.limit(limit);
+	return json(rows);
 };

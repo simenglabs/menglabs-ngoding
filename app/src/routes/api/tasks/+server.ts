@@ -1,132 +1,90 @@
 import { json } from '@sveltejs/kit';
-import { env } from '$env/dynamic/private';
 import { db } from '$lib/server/db';
-import { perencanaan, fitur, subFitur, kanbanTask } from '$lib/server/db/schema';
-import { eq, and } from 'drizzle-orm';
+import { fitur, subFitur, kanbanTask, perencanaan } from '$lib/server/db/schema';
+import { eq } from 'drizzle-orm';
+import { readJson, requiredString, requireOwnedSubFeature, requireUser } from '$lib/server/http';
+import { rateLimit } from '$lib/server/rateLimit';
+import { chatCompletion, LlmError, parseJsonObject } from '$lib/server/llm';
 import type { RequestHandler } from './$types';
 
-const SYSTEM = `Kamu generate TASK breakdown untuk 1 Sub Fitur.
-Output JSON valid saja: {"tasks":[{"id":"task-1","title":"string","description":"string 1 kalimat","priority":"high|medium|low","estimate":"4h|1d|2d"}]}
-Buat 4-6 tasks yang actionable, berurutan, cover FE/BE/QA. Bahasa sesuai permintaan.`;
+const SYSTEM = `Buat 4-6 task actionable untuk satu sub fitur. Output JSON valid tanpa markdown: {"tasks":[{"title":"...","description":"...","priority":"high|medium|low","estimate":"4h|1d|2d"}]}.`;
 
-export const POST: RequestHandler = async ({ request }) => {
-	const { subFiturTitle, subFiturDesc, fiturTitle, perencanaanTitle, lang, perencanaanId, fiturId, subFiturId } = await request.json();
-	if (!subFiturTitle) return json({ message: 'subFiturTitle required' }, { status: 400 });
-
-	const baseUrl = env.LLM_BASE_URL ?? 'https://omni.menglabs.id/v1';
-	const apiKey = env.LLM_API_KEY;
-	const model = env.LLM_MODEL ?? 'antigravity/claude-opus-4-6-thinking';
-	if (!apiKey) return json({ message: 'LLM_API_KEY not set' }, { status: 500 });
-
-	const langInstruct = lang === 'English' ? 'Bahasa Inggris.' : lang === '日本語' ? 'Bahasa Jepang.' : 'Bahasa Indonesia.';
-	const userContent = `${langInstruct}\nPerencanaan: ${perencanaanTitle ?? ''}\nFitur: ${fiturTitle ?? ''}\nSub Fitur: ${subFiturTitle} - ${subFiturDesc ?? ''}\nBuat tasks.`;
-
+export const POST: RequestHandler = async ({ request, locals }) => {
+	const current = requireUser(locals.user);
+	const body = await readJson(request);
+	const subFiturId = requiredString(body, 'subFiturId', 100);
+	const sub = await requireOwnedSubFeature(current, subFiturId);
+	const existing = await db.select().from(kanbanTask).where(eq(kanbanTask.subFiturId, sub.id));
+	if (existing.length || sub.tasksGeneratedAt) return json({ tasks: existing, generated: false });
+	const limited = await rateLimit(`tasks:${current.id}`, 30, 60 * 60_000);
+	if (limited) return limited;
+	const [[feature], [plan]] = await Promise.all([
+		db.select().from(fitur).where(eq(fitur.id, sub.fiturId)).limit(1),
+		db.select().from(perencanaan).where(eq(perencanaan.id, sub.perencanaanId)).limit(1)
+	]);
 	try {
-		const resp = await fetch(`${baseUrl}/chat/completions`, {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-			body: JSON.stringify({
-				model,
-				stream: false,
-				max_tokens: 1200,
-				temperature: 0.6,
-				messages: [
-					{ role: 'system', content: SYSTEM },
-					{ role: 'user', content: userContent }
-				]
-			})
-		});
-		if (!resp.ok) {
-			const err = await resp.text();
-			return json({ message: `LLM error ${resp.status}`, detail: err.slice(0, 800) }, { status: 502 });
-		}
-		const data = await resp.json();
-		let content: string = data.choices?.[0]?.message?.content ?? '';
-		content = content.trim().replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/i, '').trim();
-		let parsed: unknown;
-		try {
-			parsed = JSON.parse(content);
-		} catch {
-			const m = content.match(/\{[\s\S]*\}/);
-			if (m) parsed = JSON.parse(m[0]);
-			else throw new Error(content.slice(0, 500));
-		}
-		const tasks = (parsed as Record<string, unknown>).tasks as Array<{ title: string; description: string; priority: string; estimate: string }>;
-
-		// === Persist langsung ke DB (kanban_task) jika ada id referensi ===
-		let persisted: typeof tasks | null = null;
-		// coba resolve ids via perencanaanId/fiturId/subFiturId atau fallback cari by title
-		let perId = perencanaanId as string | undefined;
-		let fId = fiturId as string | undefined;
-		let sId = subFiturId as string | undefined;
-
-		if (!perId && perencanaanTitle) {
-			const r = await db.select().from(perencanaan).where(eq(perencanaan.title, perencanaanTitle)).limit(1);
-			perId = r[0]?.id;
-		}
-		if (!fId && fiturTitle && perId) {
-			const r = await db.select().from(fitur).where(and(eq(fitur.perencanaanId, perId), eq(fitur.title, fiturTitle))).limit(1);
-			fId = r[0]?.id;
-		}
-		if (!sId && subFiturTitle && fId) {
-			const r = await db.select().from(subFitur).where(and(eq(subFitur.fiturId, fId), eq(subFitur.title, subFiturTitle))).limit(1);
-			sId = r[0]?.id;
-		}
-		// jika masih belum ketemu, fallback cari subFitur by title saja (terbaru)
-		if (!sId) {
-			const r = await db.select().from(subFitur).where(eq(subFitur.title, subFiturTitle)).limit(1);
-			sId = r[0]?.id;
-			if (sId) {
-				const sr = await db.select().from(subFitur).where(eq(subFitur.id, sId)).limit(1);
-				fId = sr[0]?.fiturId;
-				perId = sr[0]?.perencanaanId;
-			}
-		}
-
-		if (perId && fId && sId) {
-			for (const t of tasks) {
-				await db.insert(kanbanTask).values({
-					subFiturId: sId,
-					fiturId: fId,
-					perencanaanId: perId,
-					title: t.title,
-					description: t.description,
-					priority: t.priority ?? 'medium',
-					estimate: t.estimate ?? '1d',
-					status: 'todo'
-				});
-			}
-			const rows = await db.select().from(kanbanTask).where(eq(kanbanTask.subFiturId, sId));
-			persisted = rows.map((r) => ({ id: r.id, title: r.title, description: r.description, priority: r.priority, estimate: r.estimate, status: r.status }));
-		}
-
-		return json({ tasks: persisted ?? tasks, usage: data.usage, dbPersisted: !!persisted }, { status: 200 });
-	} catch (e) {
-		console.error(e);
-		const fallback = [
-			{ id: 'task-1', title: 'Desain UI sub fitur', description: 'Mockup dan komponen', priority: 'high', estimate: '1d' },
-			{ id: 'task-2', title: 'Implement FE', description: 'Svelte + API', priority: 'high', estimate: '1d' },
-			{ id: 'task-3', title: 'Implement BE', description: 'Endpoint + DB', priority: 'high', estimate: '1d' },
-			{ id: 'task-4', title: 'Test & QA', description: 'Unit + manual', priority: 'medium', estimate: '4h' }
-		];
-		// fallback juga persist jika ada ids
-		try {
-			let perId2 = perencanaanId as string | undefined;
-			let fId2 = fiturId as string | undefined;
-			let sId2 = subFiturId as string | undefined;
-			if (!sId2 && subFiturTitle) {
-				const r = await db.select().from(subFitur).where(eq(subFitur.title, subFiturTitle)).limit(1);
-				sId2 = r[0]?.id;
-				if (sId2) {
-					const sr = await db.select().from(subFitur).where(eq(subFitur.id, sId2)).limit(1);
-					fId2 = sr[0]?.fiturId;
-					perId2 = sr[0]?.perencanaanId;
+		const completion = await chatCompletion(
+			[
+				{ role: 'system', content: SYSTEM },
+				{
+					role: 'user',
+					content: `Proyek: ${plan.title}\nFitur: ${feature.title}\nSub fitur: ${sub.title}\nDeskripsi: ${sub.description}\nBahasa: ${plan.lang}`
 				}
-			}
-			if (perId2 && fId2 && sId2) {
-				for (const t of fallback) await db.insert(kanbanTask).values({ subFiturId: sId2, fiturId: fId2, perencanaanId: perId2, title: t.title, description: t.description, priority: t.priority, estimate: t.estimate, status: 'todo' });
-			}
-		} catch {}
-		return json({ tasks: fallback, fallback: true }, { status: 200 });
+			],
+			{ maxTokens: 1500, temperature: 0.5 }
+		);
+		const parsed = parseJsonObject(completion.content);
+		if (!Array.isArray(parsed.tasks) || !parsed.tasks.length || parsed.tasks.length > 8)
+			throw new LlmError('INVALID_OUTPUT', 'invalid tasks');
+		const normalized = parsed.tasks.map((raw) => {
+			if (!raw || typeof raw !== 'object') throw new LlmError('INVALID_OUTPUT', 'invalid task');
+			const item = raw as Record<string, unknown>;
+			if (typeof item.title !== 'string' || !item.title.trim() || item.title.length > 300)
+				throw new LlmError('INVALID_OUTPUT', 'invalid task title');
+			if (
+				typeof item.description !== 'string' ||
+				!item.description.trim() ||
+				item.description.length > 2000
+			)
+				throw new LlmError('INVALID_OUTPUT', 'invalid task description');
+			const title = item.title.trim();
+			const description = item.description.trim();
+			const priority = ['high', 'medium', 'low'].includes(String(item.priority))
+				? String(item.priority)
+				: 'medium';
+			const estimate = typeof item.estimate === 'string' ? item.estimate.slice(0, 20) : '1d';
+			return { title, description, priority, estimate };
+		});
+		const rows = await db.transaction(async (tx) => {
+			const [locked] = await tx
+				.update(subFitur)
+				.set({ tasksGeneratedAt: new Date() })
+				.where(eq(subFitur.id, sub.id))
+				.returning();
+			if (!locked) throw new Error('sub feature disappeared');
+			const nowExisting = await tx
+				.select()
+				.from(kanbanTask)
+				.where(eq(kanbanTask.subFiturId, sub.id));
+			if (nowExisting.length) return nowExisting;
+			return tx
+				.insert(kanbanTask)
+				.values(
+					normalized.map((task) => ({
+						...task,
+						subFiturId: sub.id,
+						fiturId: sub.fiturId,
+						perencanaanId: sub.perencanaanId,
+						status: 'todo'
+					}))
+				)
+				.returning();
+		});
+		return json({ tasks: rows, generated: true, usage: completion.usage });
+	} catch (cause) {
+		if (cause instanceof LlmError)
+			return json({ message: cause.message, code: cause.code }, { status: cause.status });
+		console.error('task generation failed', cause);
+		return json({ message: 'tasks tidak tersimpan', code: 'PERSISTENCE_FAILED' }, { status: 500 });
 	}
 };

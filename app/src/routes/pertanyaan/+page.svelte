@@ -43,7 +43,12 @@
 			const res = await fetch('/api/questions', {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({ prompt: d.prompt, lang: d.lang, techMode: d.techMode, techStack: d.techStack })
+				body: JSON.stringify({
+					prompt: d.prompt,
+					lang: d.lang,
+					techMode: d.techMode,
+					techStack: d.techStack
+				})
 			});
 			const data = await res.json();
 			if (!res.ok) {
@@ -109,21 +114,29 @@
 	<div class="mx-auto max-w-[720px]">
 		<h1 class="text-[28px] font-extrabold tracking-tight">Beberapa pertanyaan</h1>
 		<div class="mt-1 flex items-center justify-between">
-			<p class="text-[14px] text-[#94a3b8]">Biar PRD-nya lebih akurat. Jawab semua pertanyaan di bawah.</p>
+			<p class="text-[14px] text-[#94a3b8]">
+				Biar PRD-nya lebih akurat. Jawab semua pertanyaan di bawah.
+			</p>
 			<span class="text-xs font-medium text-[#94a3b8]">{answered}/{questions.length || 5}</span>
 		</div>
-		{#if draftPrompt}<p class="mt-2 truncate text-xs text-[#475569]">Ide: "{draftPrompt}..." · {loading ? 'AI lagi analisa...' : ''}</p>{/if}
+		{#if draftPrompt}<p class="mt-2 truncate text-xs text-[#475569]">
+				Ide: "{draftPrompt}..." · {loading ? 'AI lagi analisa...' : ''}
+			</p>{/if}
 
 		{#if loading}
 			<div class="mt-8 space-y-4">
 				{#each Array(5) as _}
-					<div class="h-28 animate-pulse rounded-2xl bg-[#1a2235] border border-[#252f47]"></div>
+					<div class="h-28 animate-pulse rounded-2xl border border-[#252f47] bg-[#1a2235]"></div>
 				{/each}
 			</div>
 		{/if}
 
 		{#if error}
-			<div class="mt-6 rounded-xl border border-red-900/50 bg-red-950/40 px-4 py-3 text-sm text-red-200">{error}</div>
+			<div
+				class="mt-6 rounded-xl border border-red-900/50 bg-red-950/40 px-4 py-3 text-sm text-red-200"
+			>
+				{error}
+			</div>
 		{/if}
 
 		{#if !loading && questions.length > 0}
@@ -131,12 +144,17 @@
 				{#each questions as q, i}
 					<div class="py-6">
 						<div class="flex items-start justify-between gap-3">
-							<p class="text-[14px] font-medium leading-relaxed">
+							<p class="text-[14px] leading-relaxed font-medium">
 								<span class="text-[#64748b]">{i + 1}.</span>
 								{q.text}
-								{#if q.type === 'multi'}<span class="font-normal text-[#64748b]"> (boleh pilih beberapa)</span>{/if}
+								{#if q.type === 'multi'}<span class="font-normal text-[#64748b]">
+										(boleh pilih beberapa)</span
+									>{/if}
 							</p>
-							<button onclick={() => skip(q)} class="shrink-0 text-xs text-[#64748b] hover:text-[#94a3b8]">Lewati</button>
+							<button
+								onclick={() => skip(q)}
+								class="shrink-0 text-xs text-[#64748b] hover:text-[#94a3b8]">Lewati</button
+							>
 						</div>
 
 						{#if q.type === 'text'}
@@ -174,12 +192,17 @@
 										class="w-28 rounded-full border border-dashed border-[#2a3958] bg-transparent px-3 py-1.5 text-xs placeholder:text-[#475569] focus:border-[#c45a36] focus:outline-none"
 									/>
 									{#if (customInputs[q.id] ?? '').trim()}
-										<button onclick={() => addCustom(q)} class="rounded-full bg-[#1e293b] px-2 py-1 text-xs text-white">+</button>
+										<button
+											onclick={() => addCustom(q)}
+											class="rounded-full bg-[#1e293b] px-2 py-1 text-xs text-white">+</button
+										>
 									{/if}
 								</div>
 							</div>
 							{#if Array.isArray(answers[q.id]) && (answers[q.id] as string[]).length > 0}
-								<p class="mt-2 text-[11px] text-[#64748b]">Dipilih: {(answers[q.id] as string[]).join(', ')}</p>
+								<p class="mt-2 text-[11px] text-[#64748b]">
+									Dipilih: {(answers[q.id] as string[]).join(', ')}
+								</p>
 							{/if}
 						{/if}
 					</div>
@@ -187,16 +210,25 @@
 			</div>
 
 			<div class="mt-8 flex items-center justify-between">
-				<button onclick={() => goto('/preferensi')} class="text-sm text-[#64748b] hover:text-white">← Kembali</button>
-				<button onclick={lanjut} class="rounded-xl bg-[#c45a36] px-7 py-2.5 text-sm font-semibold text-white hover:bg-[#d06a47]">
+				<button onclick={() => goto('/preferensi')} class="text-sm text-[#64748b] hover:text-white"
+					>← Kembali</button
+				>
+				<button
+					onclick={lanjut}
+					class="rounded-xl bg-[#c45a36] px-7 py-2.5 text-sm font-semibold text-white hover:bg-[#d06a47]"
+				>
 					Lanjut {answered > 0 ? `(${answered} terjawab)` : ''}
 				</button>
 			</div>
-			<p class="mt-2 text-center text-[11px] text-[#475569]">Lewati boleh — tapi makin lengkap, PRD makin akurat. Hasil tetap disimpan untuk LLM final.</p>
+			<p class="mt-2 text-center text-[11px] text-[#475569]">
+				Lewati boleh — tapi makin lengkap, PRD makin akurat. Hasil tetap disimpan untuk LLM final.
+			</p>
 		{/if}
 	</div>
 </div>
 
 <style>
-	:global(body) { background: #121827; }
+	:global(body) {
+		background: #121827;
+	}
 </style>

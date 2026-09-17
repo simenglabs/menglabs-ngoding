@@ -40,6 +40,7 @@ export type Task = {
 	fiturTitle?: string;
 	subFiturId?: string;
 	subFiturTitle?: string;
+	resultJson?: string | null;
 };
 
 export type Plan = {
@@ -57,6 +58,7 @@ export type Draft = {
 	answers?: Record<number, string | string[]>;
 	plan?: Plan;
 	dbId?: string; // perencanaan.id di DB
+	prdResult?: { id: string; content: string; model: string; usage?: { total_tokens: number } };
 };
 
 const KEY = 'prd_draft';
