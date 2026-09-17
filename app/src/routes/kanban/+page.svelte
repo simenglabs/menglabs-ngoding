@@ -97,10 +97,10 @@
 		if (document.hidden) {
 			if (polling) clearTimeout(polling);
 			polling = null;
-		} else void refreshTasks(true);
+		} else void refreshTasks();
 	}
 
-	async function refreshTasks(manual = false) {
+	async function refreshTasks() {
 		if (!dbId || document.hidden || destroyed) return;
 		const version = ++refreshVersion;
 		try {
@@ -110,9 +110,11 @@
 				throw new Error(data.message ?? `Gagal refresh Kanban (${response.status})`);
 			}
 			const rows = await response.json();
-			if (version === refreshVersion) dbTasks = rows;
+			if (version === refreshVersion) {
+				dbTasks = rows;
+				error = '';
+			}
 			pollDelay = 5000;
-			if (manual) error = '';
 		} catch (cause) {
 			if (version === refreshVersion)
 				error = cause instanceof Error ? cause.message : String(cause);
@@ -219,10 +221,10 @@
 		if (!plan || generating) return;
 		generating = true;
 		error = '';
-		for (const f of plan.fiturs)
-			for (const s of f.subFiturs)
-				if (!s.tasks || s.tasks.length === 0) {
-					try {
+		try {
+			for (const f of plan.fiturs)
+				for (const s of f.subFiturs)
+					if (!s.tasks || s.tasks.length === 0) {
 						const res = await fetch('/api/tasks', {
 							method: 'POST',
 							headers: { 'content-type': 'application/json' },
@@ -230,29 +232,19 @@
 						});
 						const data = await res.json();
 						if (!res.ok) throw new Error(data.message ?? 'Gagal generate task');
-						if (data.tasks && isDbMode)
-							dbTasks = [
-								...dbTasks,
-								...data.tasks.map((t: Task) => ({ ...t, status: 'todo' as const }))
-							];
-						else if (data.tasks) {
+						if (data.tasks && !isDbMode)
 							s.tasks = data.tasks.map((t: Task) => ({ ...t, status: 'todo' as const }));
-						}
-					} catch (cause) {
-						error = cause instanceof Error ? cause.message : String(cause);
-						generating = false;
-						return;
 					}
-				}
-		if (!isDbMode) {
-			localTasks = flatten(plan);
-			const dd = loadDraft();
-			if (dd) saveDraft({ ...dd, plan });
-		} else if (dbId) {
-			const r = await fetch(`/api/kanban?perencanaanId=${dbId}`);
-			if (r.ok) dbTasks = await r.json();
+			if (!isDbMode) {
+				localTasks = flatten(plan);
+				const draft = loadDraft();
+				if (draft) saveDraft({ ...draft, plan });
+			} else await refreshTasks();
+		} catch (cause) {
+			error = cause instanceof Error ? cause.message : String(cause);
+		} finally {
+			generating = false;
 		}
-		generating = false;
 	}
 </script>
 
@@ -291,7 +283,7 @@
 					>{generating ? 'Generating…' : 'Generate semua tasks'}</button
 				>
 				{#if isDbMode}<button
-						onclick={() => refreshTasks(true)}
+						onclick={() => refreshTasks()}
 						class="rounded-full border border-[#2a3958] px-3 py-1.5 text-xs">Refresh</button
 					>{/if}
 				<button

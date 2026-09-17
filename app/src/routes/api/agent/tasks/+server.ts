@@ -2,13 +2,15 @@ import crypto from 'node:crypto';
 import { json } from '@sveltejs/kit';
 import { db } from '$lib/server/db';
 import { kanbanTask, perencanaan, fitur, subFitur, prdDocument } from '$lib/server/db/schema';
-import { and, eq, asc, desc, gt, isNotNull, lt, or } from 'drizzle-orm';
+import { and, eq, asc, desc, gt, isNotNull, lt, or, sql } from 'drizzle-orm';
 import { hashAgentSecret, requireAgent, type AgentPrincipal } from '$lib/server/agentAuth';
 import { readJson } from '$lib/server/http';
+import { SCAFFOLD_TASK_TITLE } from '$lib/server/taskScaffold';
 import type { RequestHandler } from './$types';
 
 const LEASE_MS = 15 * 60_000;
 const statuses = ['todo', 'doing', 'done', 'backlog'] as const;
+const scaffoldFirst = sql`case when ${kanbanTask.title} = ${SCAFFOLD_TASK_TITLE} then 0 else 1 end`;
 
 function scopedPlan(principal: AgentPrincipal, requested?: string | null) {
 	if (principal.kind === 'token') {
@@ -72,7 +74,7 @@ export const GET: RequestHandler = async ({ url, request }) => {
 		.innerJoin(fitur, eq(kanbanTask.fiturId, fitur.id))
 		.innerJoin(subFitur, eq(kanbanTask.subFiturId, subFitur.id))
 		.where(where)
-		.orderBy(asc(kanbanTask.createdAt))
+		.orderBy(scaffoldFirst, asc(kanbanTask.createdAt))
 		.limit(limit);
 	const tasks = rows.map((row) => ({
 		...row.task,
@@ -102,7 +104,7 @@ export const POST: RequestHandler = async ({ request }) => {
 			.select()
 			.from(kanbanTask)
 			.where(where)
-			.orderBy(asc(kanbanTask.createdAt))
+			.orderBy(scaffoldFirst, asc(kanbanTask.createdAt))
 			.limit(1);
 		return json({ task: task ? await contextFor(task) : null, claimed: false });
 	}
@@ -124,7 +126,7 @@ export const POST: RequestHandler = async ({ request }) => {
 			.select()
 			.from(kanbanTask)
 			.where(where)
-			.orderBy(asc(kanbanTask.createdAt))
+			.orderBy(scaffoldFirst, asc(kanbanTask.createdAt))
 			.limit(1);
 		if (!next) return json({ task: null, claimed: false, message: 'no available tasks' });
 		const claimSecret = crypto.randomBytes(24).toString('base64url');

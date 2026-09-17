@@ -5,6 +5,7 @@ import { eq } from 'drizzle-orm';
 import { readJson, requiredString, requireOwnedSubFeature, requireUser } from '$lib/server/http';
 import { rateLimit } from '$lib/server/rateLimit';
 import { chatCompletion, LlmError, parseJsonObject } from '$lib/server/llm';
+import { prependScaffold, type GeneratedTaskInput } from '$lib/server/taskScaffold';
 import type { RequestHandler } from './$types';
 
 const SYSTEM = `Buat 4-6 task actionable untuk satu sub fitur. Output JSON valid tanpa markdown: {"tasks":[{"title":"...","description":"...","priority":"high|medium|low","estimate":"4h|1d|2d"}]}.`;
@@ -36,7 +37,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		const parsed = parseJsonObject(completion.content);
 		if (!Array.isArray(parsed.tasks) || !parsed.tasks.length || parsed.tasks.length > 8)
 			throw new LlmError('INVALID_OUTPUT', 'invalid tasks');
-		const normalized = parsed.tasks.map((raw) => {
+		const normalized: GeneratedTaskInput[] = parsed.tasks.map((raw) => {
 			if (!raw || typeof raw !== 'object') throw new LlmError('INVALID_OUTPUT', 'invalid task');
 			const item = raw as Record<string, unknown>;
 			if (typeof item.title !== 'string' || !item.title.trim() || item.title.length > 300)
@@ -49,9 +50,10 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 				throw new LlmError('INVALID_OUTPUT', 'invalid task description');
 			const title = item.title.trim();
 			const description = item.description.trim();
-			const priority = ['high', 'medium', 'low'].includes(String(item.priority))
-				? String(item.priority)
-				: 'medium';
+			const priority =
+				item.priority === 'high' || item.priority === 'medium' || item.priority === 'low'
+					? item.priority
+					: 'medium';
 			const estimate = typeof item.estimate === 'string' ? item.estimate.slice(0, 20) : '1d';
 			return { title, description, priority, estimate };
 		});
@@ -67,10 +69,18 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 				.from(kanbanTask)
 				.where(eq(kanbanTask.subFiturId, sub.id));
 			if (nowExisting.length) return nowExisting;
+			const projectTasks = await tx
+				.select({ id: kanbanTask.id })
+				.from(kanbanTask)
+				.where(eq(kanbanTask.perencanaanId, sub.perencanaanId))
+				.limit(1);
+			const tasksToInsert = projectTasks.length
+				? normalized
+				: prependScaffold(normalized, plan.techStackJson ? JSON.parse(plan.techStackJson) : {});
 			return tx
 				.insert(kanbanTask)
 				.values(
-					normalized.map((task) => ({
+					tasksToInsert.map((task) => ({
 						...task,
 						subFiturId: sub.id,
 						fiturId: sub.fiturId,

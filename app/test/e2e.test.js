@@ -218,6 +218,9 @@ test(
 		assert.equal(planned.response.status, 201, JSON.stringify(planned.body));
 		const projectId = planned.body.dbId;
 		const subFeatureId = planned.body.plan.fiturs[0].subFiturs[0].id;
+		const firstTask = planned.body.plan.fiturs[0].subFiturs[0].tasks[0];
+		assert.equal(firstTask.title, 'WAJIB: Buat kerangka frontend dan backend');
+		assert.match(firstTask.description, /frontend \(Svelte\).*backend \(Node\)/);
 
 		const prd = await api('/api/prd', {
 			method: 'POST',
@@ -237,6 +240,7 @@ test(
 		});
 		assert.equal(generated.response.status, 200, JSON.stringify(generated.body));
 		assert.equal(generated.body.tasks.length, 1);
+		assert.equal(generated.body.tasks[0].title, 'WAJIB: Buat kerangka frontend dan backend');
 
 		const createdToken = await api('/api/agent/tokens', {
 			method: 'POST',

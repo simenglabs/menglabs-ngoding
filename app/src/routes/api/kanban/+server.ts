@@ -1,8 +1,9 @@
 import { json } from '@sveltejs/kit';
 import { db } from '$lib/server/db';
 import { kanbanTask } from '$lib/server/db/schema';
-import { eq, desc } from 'drizzle-orm';
+import { eq, asc, sql } from 'drizzle-orm';
 import { requireOwnedPlan, requireUser } from '$lib/server/http';
+import { SCAFFOLD_TASK_TITLE } from '$lib/server/taskScaffold';
 import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async ({ url, locals }) => {
@@ -14,6 +15,9 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 			.select()
 			.from(kanbanTask)
 			.where(eq(kanbanTask.perencanaanId, id))
-			.orderBy(desc(kanbanTask.createdAt))
+			.orderBy(
+				sql`case when ${kanbanTask.title} = ${SCAFFOLD_TASK_TITLE} then 0 else 1 end`,
+				asc(kanbanTask.createdAt)
+			)
 	);
 };

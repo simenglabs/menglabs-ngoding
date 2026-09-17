@@ -4,9 +4,10 @@ import { perencanaan, fitur, subFitur, kanbanTask } from '$lib/server/db/schema'
 import { requireUser, readJson, requiredString } from '$lib/server/http';
 import { rateLimit } from '$lib/server/rateLimit';
 import { chatCompletion, LlmError, parseJsonObject } from '$lib/server/llm';
+import { prependScaffold } from '$lib/server/taskScaffold';
 import type { RequestHandler } from './$types';
 
-const SYSTEM = `Buat breakdown proyek sebagai JSON valid tanpa markdown: {"perencanaan":{"title":"...","description":"..."},"fiturs":[{"title":"...","description":"...","subFiturs":[{"title":"...","description":"...","tasks":[{"title":"...","description":"...","priority":"high|medium|low","estimate":"2h|1d"}]}]}]}. Buat 3-4 fitur dan 2-4 sub fitur per fitur. Tasks hanya untuk satu sub fitur pertama, lainnya array kosong. Bahasa mengikuti permintaan.`;
+const SYSTEM = `Buat breakdown proyek sebagai JSON valid tanpa markdown: {"perencanaan":{"title":"...","description":"..."},"fiturs":[{"title":"...","description":"...","subFiturs":[{"title":"...","description":"...","tasks":[{"title":"...","description":"...","priority":"high|medium|low","estimate":"2h|1d"}]}]}]}. Buat 3-4 fitur dan 2-4 sub fitur per fitur. Tasks hanya untuk satu sub fitur pertama, lainnya array kosong. Task pertama wajib menyiapkan kerangka frontend dan backend sesuai stack sebelum implementasi fitur. Bahasa mengikuti permintaan.`;
 type GeneratedTask = {
 	title: string;
 	description: string;
@@ -44,7 +45,11 @@ function validatePlan(value: Record<string, unknown>): GeneratedPlan {
 		fiturs: value.fiturs.map((raw) => {
 			if (!raw || typeof raw !== 'object') throw new LlmError('INVALID_OUTPUT', 'invalid feature');
 			const feature = raw as Record<string, unknown>;
-			if (!Array.isArray(feature.subFiturs) || feature.subFiturs.length > 8)
+			if (
+				!Array.isArray(feature.subFiturs) ||
+				feature.subFiturs.length < 1 ||
+				feature.subFiturs.length > 8
+			)
 				throw new LlmError('INVALID_OUTPUT', 'invalid sub features');
 			return {
 				title: short(feature.title, 'feature title', 200),
@@ -96,6 +101,10 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			{ maxTokens: 4000, temperature: 0.6 }
 		);
 		const generated = validatePlan(parseJsonObject(completion.content));
+		generated.fiturs[0].subFiturs[0].tasks = prependScaffold(
+			generated.fiturs[0].subFiturs[0].tasks,
+			body.techStack
+		);
 		const saved = await db.transaction(async (tx) => {
 			const [planRow] = await tx
 				.insert(perencanaan)
