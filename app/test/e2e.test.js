@@ -120,11 +120,13 @@ test(
 
 		let simulatedTimeouts = 0;
 		let compactRetries = 0;
+		const llmRequests = [];
 		const llmServer = http.createServer((request, response) => {
 			let raw = '';
 			request.on('data', (chunk) => (raw += chunk));
 			request.on('end', () => {
 				const body = JSON.parse(raw || '{}');
+				llmRequests.push({ body, authorization: request.headers.authorization });
 				const send = () => {
 					response.writeHead(200, { 'content-type': 'application/json' });
 					response.end(
@@ -162,9 +164,11 @@ test(
 			HOST: '127.0.0.1',
 			DATABASE_URL: databaseUrl,
 			LLM_API_KEY: 'e2e-key',
+			LLM_CREDENTIAL_KEY: 'e2e-credential-encryption-key',
 			LLM_BASE_URL: `http://127.0.0.1:${llmPort}`,
 			LLM_MAX_CONCURRENCY: '1',
-			LLM_REQUEST_TIMEOUT_MS: '100'
+			LLM_REQUEST_TIMEOUT_MS: '100',
+			NODE_ENV: 'test'
 		};
 		const app = spawnPreview(appPort, appEnv);
 		let appLog = '';
@@ -198,6 +202,35 @@ test(
 		});
 		assert.equal(registered.response.status, 201, JSON.stringify(registered.body));
 
+		const customLlm = await api('/api/settings/llm', {
+			method: 'PUT',
+			body: JSON.stringify({
+				mode: 'custom',
+				baseUrl: `http://127.0.0.1:${llmPort}`,
+				model: 'user-selected-model',
+				apiKey: 'user-secret-key',
+				timeoutMs: 100
+			})
+		});
+		assert.equal(customLlm.response.status, 200, JSON.stringify(customLlm.body));
+		assert.equal(customLlm.body.custom.hasApiKey, true);
+		assert.doesNotMatch(JSON.stringify(customLlm.body), /user-secret-key/);
+		const readLlm = await api('/api/settings/llm');
+		assert.equal(readLlm.body.mode, 'custom');
+		assert.doesNotMatch(JSON.stringify(readLlm.body), /user-secret-key/);
+		const settingsDb = createClient({ url: databaseUrl });
+		const storedSetting = await settingsDb.execute(
+			'select api_key_encrypted from llm_setting limit 1'
+		);
+		assert.notEqual(storedSetting.rows[0].api_key_encrypted, 'user-secret-key');
+		assert.match(String(storedSetting.rows[0].api_key_encrypted), /^v1:/);
+		settingsDb.close();
+		const testedLlm = await api('/api/settings/llm', { method: 'POST' });
+		assert.equal(testedLlm.response.status, 200, JSON.stringify(testedLlm.body));
+		assert.equal(testedLlm.body.model, 'user-selected-model');
+		assert.equal(llmRequests.at(-1).body.model, 'user-selected-model');
+		assert.equal(llmRequests.at(-1).authorization, 'Bearer user-secret-key');
+
 		const concurrentQuestions = await Promise.all([
 			api('/api/questions', {
 				method: 'POST',
@@ -216,6 +249,7 @@ test(
 		});
 		assert.equal(questions.response.status, 200, JSON.stringify(questions.body));
 		assert.equal(questions.body.questions.length, 5);
+		assert.equal(llmRequests.at(-1).body.model, 'user-selected-model');
 
 		const planned = await api('/api/plan', {
 			method: 'POST',
@@ -403,6 +437,9 @@ test(
 			})
 		});
 		assert.equal(secondUser.response.status, 201);
+		const isolatedLlmSettings = await api('/api/settings/llm');
+		assert.equal(isolatedLlmSettings.body.mode, 'server');
+		assert.equal(isolatedLlmSettings.body.custom, null);
 		const crossUser = await api(`/api/perencanaan/${projectId}`);
 		assert.equal(crossUser.response.status, 404);
 		const crossUserJob = await api(`/api/plan?jobId=${planned.body.id}`);

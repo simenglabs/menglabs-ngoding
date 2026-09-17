@@ -44,7 +44,8 @@ export async function generateTasksForSubFeature(
 				content: `Proyek: ${plan.title}\nFitur: ${feature.title}\nSub fitur: ${sub.title}\nDeskripsi: ${sub.description}\nDeskripsi proyek: ${plan.description}\nIde asli: ${plan.prompt}\nDeskripsi fitur: ${feature.description}\nTeknologi: ${plan.techStackJson}\nPertanyaan: ${plan.questionsJson}\nJawaban: ${plan.answersJson}\nBahasa: ${plan.lang}\nDokumen kebutuhan (maksimal 30.000 karakter): ${prd?.content.slice(0, 30_000) ?? 'Belum tersedia; gunakan ide dan jawaban.'}\nTugas yang sudah ada (maksimal 80): ${JSON.stringify(otherTasks)}`
 			}
 		],
-		{ maxTokens: options.compact ? 2500 : 3000, temperature: 0.4 }
+		{ maxTokens: options.compact ? 2500 : 3000, temperature: 0.4 },
+		plan.userId
 	);
 	const parsed = parseJsonObject(completion.content);
 	if (!Array.isArray(parsed.tasks) || !parsed.tasks.length || parsed.tasks.length > 8)

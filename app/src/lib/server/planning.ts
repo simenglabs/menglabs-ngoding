@@ -135,14 +135,15 @@ export async function dispatchPlanningJob(origin: string, id: string, token: str
 	throw lastError instanceof Error ? lastError : new Error('planning dispatch failed');
 }
 
-async function generateOutline(input: PlanningInput) {
+async function generateOutline(input: PlanningInput, userId: string) {
 	const context = `Bahasa: ${input.lang}\nMode stack: ${input.techMode}\nStack: ${JSON.stringify(input.techStack)}\nPertanyaan: ${JSON.stringify(input.questions)}\nJawaban: ${JSON.stringify(input.answers)}\nIde: ${input.prompt}`;
 	const completion = await chatCompletion(
 		[
 			{ role: 'system', content: OUTLINE_SYSTEM },
 			{ role: 'user', content: context }
 		],
-		{ maxTokens: 3000, temperature: 0.5 }
+		{ maxTokens: 3000, temperature: 0.5 },
+		userId
 	);
 	return validateOutline(parseJsonObject(completion.content));
 }
@@ -258,7 +259,7 @@ export async function processPlanningStep(
 	try {
 		const input = JSON.parse(claimed.inputJson) as PlanningInput;
 		if (claimed.stage === 'outline') {
-			await saveOutline(jobId, claimed.userId, input, await generateOutline(input));
+			await saveOutline(jobId, claimed.userId, input, await generateOutline(input, claimed.userId));
 		} else if (claimed.stage === 'tasks' && claimed.perencanaanId) {
 			const subs = await db
 				.select({ id: subFitur.id })

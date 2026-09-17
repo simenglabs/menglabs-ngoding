@@ -38,7 +38,8 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 					content: `Bahasa: ${String(body.lang ?? 'Bahasa Indonesia').slice(0, 50)}\nStack: ${JSON.stringify(body.techStack ?? {})}\nJawaban: ${JSON.stringify(body.answers ?? {})}\nIde: ${prompt}`
 				}
 			],
-			{ maxTokens: 4000, temperature: 0.6 }
+			{ maxTokens: 4000, temperature: 0.6 },
+			current.id
 		);
 		const title =
 			completion.content.match(/^#\s+(?:PRD:\s*)?(.+)$/m)?.[1]?.slice(0, 200) ??

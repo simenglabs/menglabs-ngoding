@@ -45,8 +45,10 @@
 				>Proyek saya</a
 			>
 			<a href="/create" class="primary-link">Buat proyek</a>
-			{#if signedIn}<button onclick={logout} class="quiet-link">Keluar</button>{:else}<a
-					href="/login">Masuk</a
+			{#if signedIn}<a
+					href="/pengaturan"
+					aria-current={page.url.pathname === '/pengaturan' ? 'page' : undefined}>Pengaturan</a
+				><button onclick={logout} class="quiet-link">Keluar</button>{:else}<a href="/login">Masuk</a
 				>{/if}
 		</nav>
 	</div>

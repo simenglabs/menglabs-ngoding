@@ -1,5 +1,6 @@
 import { env } from '$env/dynamic/private';
 import { acquireConcurrency, releaseConcurrency } from '$lib/server/rateLimit';
+import { assertSafeLlmBaseUrl, getLlmRuntimeConfig } from '$lib/server/llmSettings';
 
 export class LlmError extends Error {
 	constructor(
@@ -13,10 +14,18 @@ export class LlmError extends Error {
 
 export async function chatCompletion(
 	messages: Array<{ role: 'system' | 'user'; content: string }>,
-	options: { maxTokens: number; temperature: number }
+	options: { maxTokens: number; temperature: number },
+	userId?: string | null
 ) {
-	const apiKey = env.LLM_API_KEY;
-	if (!apiKey) throw new LlmError('CONFIG', 'LLM is not configured', 503);
+	let config;
+	try {
+		config = await getLlmRuntimeConfig(userId);
+		if (!config.custom && !config.apiKey) throw new Error('server API key missing');
+		if (config.custom) await assertSafeLlmBaseUrl(config.baseUrl);
+	} catch (cause) {
+		console.error('LLM configuration failed', cause);
+		throw new LlmError('CONFIG', 'Konfigurasi LLM tidak valid. Periksa pengaturan LLM.', 503);
+	}
 	const lease = await acquireConcurrency(
 		'llm-provider',
 		Math.max(1, Math.min(Number(env.LLM_MAX_CONCURRENCY) || 4, 20)),
@@ -24,27 +33,24 @@ export async function chatCompletion(
 	);
 	if (!lease) throw new LlmError('BUSY', 'LLM capacity is busy; retry later', 429);
 	const controller = new AbortController();
-	const configuredTimeout = Number(env.LLM_REQUEST_TIMEOUT_MS);
-	const timeoutMs = Number.isFinite(configuredTimeout)
-		? Math.max(100, Math.min(configuredTimeout, 45_000))
-		: 45_000;
-	const timeout = setTimeout(() => controller.abort(), timeoutMs);
+	const timeout = setTimeout(() => controller.abort(), config.timeoutMs);
 	try {
-		const response = await fetch(
-			`${env.LLM_BASE_URL ?? 'https://omni.menglabs.id/v1'}/chat/completions`,
-			{
-				method: 'POST',
-				signal: controller.signal,
-				headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-				body: JSON.stringify({
-					model: env.LLM_MODEL ?? 'antigravity/claude-opus-4-6-thinking',
-					stream: false,
-					max_tokens: options.maxTokens,
-					temperature: options.temperature,
-					messages
-				})
-			}
-		);
+		const response = await fetch(`${config.baseUrl}/chat/completions`, {
+			method: 'POST',
+			redirect: 'error',
+			signal: controller.signal,
+			headers: {
+				'Content-Type': 'application/json',
+				...(config.apiKey ? { Authorization: `Bearer ${config.apiKey}` } : {})
+			},
+			body: JSON.stringify({
+				model: config.model,
+				stream: false,
+				max_tokens: options.maxTokens,
+				temperature: options.temperature,
+				messages
+			})
+		});
 		if (!response.ok)
 			throw new LlmError(
 				'UPSTREAM',
@@ -58,7 +64,7 @@ export async function chatCompletion(
 		return {
 			content,
 			usage: data.usage,
-			model: env.LLM_MODEL ?? 'antigravity/claude-opus-4-6-thinking'
+			model: config.model
 		};
 	} catch (cause) {
 		if (cause instanceof LlmError) throw cause;

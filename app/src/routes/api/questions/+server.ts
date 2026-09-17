@@ -21,7 +21,8 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 					content: `Bahasa: ${String(body.lang ?? 'Bahasa Indonesia').slice(0, 50)}\nIde: ${prompt}`
 				}
 			],
-			{ maxTokens: 2000, temperature: 0.5 }
+			{ maxTokens: 2000, temperature: 0.5 },
+			current.id
 		);
 		const cleaned = completion.content
 			.trim()

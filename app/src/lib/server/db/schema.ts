@@ -56,6 +56,20 @@ export const session = sqliteTable(
 	]
 );
 
+export const llmSetting = sqliteTable('llm_setting', {
+	userId: text('user_id')
+		.primaryKey()
+		.references(() => user.id, { onDelete: 'cascade' }),
+	enabled: integer('enabled', { mode: 'boolean' }).notNull().default(false),
+	baseUrl: text('base_url').notNull(),
+	model: text('model').notNull(),
+	apiKeyEncrypted: text('api_key_encrypted'),
+	timeoutMs: integer('timeout_ms').notNull().default(45000),
+	updatedAt: integer('updated_at', { mode: 'timestamp' })
+		.notNull()
+		.$defaultFn(() => new Date())
+});
+
 // === PRD Flow: Perencanaan -> Fitur -> SubFitur -> Kanban Task ===
 export const perencanaan = sqliteTable(
 	'perencanaan',

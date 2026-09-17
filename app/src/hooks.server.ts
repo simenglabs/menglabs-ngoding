@@ -21,6 +21,7 @@ export const handle: Handle = async ({ event, resolve }) => {
 		'/detail',
 		'/implementasi',
 		'/dashboard',
+		'/pengaturan',
 		'/hasil'
 	];
 	if (
