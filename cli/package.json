@@ -4,7 +4,7 @@
   "description": "Menglabs Ngoding — sync platform ↔ local, bebas pakai agent CLI (claude, antigravity, cursor, dll)",
   "type": "module",
   "bin": {
-    "menglabs-ngoding": "./bin/cli.js"
+    "menglabs-ngoding": "bin/cli.js"
   },
   "keywords": [
     "menglabs",
