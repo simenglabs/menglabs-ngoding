@@ -24,7 +24,11 @@ export async function chatCompletion(
 	);
 	if (!lease) throw new LlmError('BUSY', 'LLM capacity is busy; retry later', 429);
 	const controller = new AbortController();
-	const timeout = setTimeout(() => controller.abort(), 45_000);
+	const configuredTimeout = Number(env.LLM_REQUEST_TIMEOUT_MS);
+	const timeoutMs = Number.isFinite(configuredTimeout)
+		? Math.max(100, Math.min(configuredTimeout, 45_000))
+		: 45_000;
+	const timeout = setTimeout(() => controller.abort(), timeoutMs);
 	try {
 		const response = await fetch(
 			`${env.LLM_BASE_URL ?? 'https://omni.menglabs.id/v1'}/chat/completions`,

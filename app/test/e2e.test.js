@@ -10,7 +10,9 @@ import { detailedTask } from './fixtures/detailed-task.js';
 import { createClient } from '@libsql/client';
 
 const appDir = path.resolve(import.meta.dirname, '..');
-const repoDir = path.resolve(appDir, '..');
+const repoDir = process.env.MAGER_E2E_REPO_DIR
+	? path.resolve(process.env.MAGER_E2E_REPO_DIR)
+	: path.resolve(appDir, '..');
 const viteBin = path.join(appDir, 'node_modules/vite/bin/vite.js');
 
 function spawnPreview(port, env) {
@@ -69,28 +71,7 @@ function run(command, args, options = {}) {
 
 function mockCompletion(body) {
 	const system = body.messages?.[0]?.content ?? '';
-	if (
-		system.includes('breakdown proyek') &&
-		body.messages?.[1]?.content?.includes('brief-singkat')
-	) {
-		return JSON.stringify({
-			perencanaan: { title: 'Invalid brief', description: 'Output harus ditolak' },
-			fiturs: [
-				{
-					title: 'Fitur',
-					description: 'Fitur pengujian',
-					subFiturs: [
-						{
-							title: 'Bagian',
-							description: 'Bagian pengujian',
-							tasks: [{ title: 'Buat fitur', description: 'Selesaikan fitur.' }]
-						}
-					]
-				}
-			]
-		});
-	}
-	if (system.includes('breakdown proyek')) {
+	if (system.includes('Susun struktur proyek')) {
 		return JSON.stringify({
 			perencanaan: { title: 'E2E Platform', description: 'Rencana pengujian penuh' },
 			fiturs: [
@@ -100,13 +81,11 @@ function mockCompletion(body) {
 					subFiturs: [
 						{
 							title: 'CLI worker',
-							description: 'Worker mengambil task dari platform',
-							tasks: [detailedTask()]
+							description: 'Worker mengambil task dari platform'
 						},
 						{
 							title: 'Pelaporan hasil',
-							description: 'Tampilkan hasil eksekusi worker dan verifikasi',
-							tasks: []
+							description: 'Tampilkan hasil eksekusi worker dan verifikasi'
 						}
 					]
 				}
@@ -139,6 +118,7 @@ test(
 		});
 		assert.equal(migration.status, 0, migration.stderr || migration.stdout);
 
+		let simulatedTimeouts = 0;
 		const llmServer = http.createServer((request, response) => {
 			let raw = '';
 			request.on('data', (chunk) => (raw += chunk));
@@ -153,7 +133,14 @@ test(
 						})
 					);
 				};
-				if (JSON.stringify(body.messages).includes('slow concurrency')) setTimeout(send, 250);
+				const messages = JSON.stringify(body.messages);
+				if (messages.includes('slow concurrency')) setTimeout(send, 50);
+				else if (
+					messages.includes('task actionable') &&
+					messages.includes('CLI worker') &&
+					simulatedTimeouts++ === 0
+				)
+					setTimeout(send, 250);
 				else send();
 			});
 		});
@@ -167,7 +154,8 @@ test(
 			DATABASE_URL: databaseUrl,
 			LLM_API_KEY: 'e2e-key',
 			LLM_BASE_URL: `http://127.0.0.1:${llmPort}`,
-			LLM_MAX_CONCURRENCY: '1'
+			LLM_MAX_CONCURRENCY: '1',
+			LLM_REQUEST_TIMEOUT_MS: '100'
 		};
 		const app = spawnPreview(appPort, appEnv);
 		let appLog = '';
@@ -220,13 +208,6 @@ test(
 		assert.equal(questions.response.status, 200, JSON.stringify(questions.body));
 		assert.equal(questions.body.questions.length, 5);
 
-		const invalidBrief = await api('/api/plan', {
-			method: 'POST',
-			body: JSON.stringify({ prompt: 'brief-singkat untuk uji penolakan' })
-		});
-		assert.equal(invalidBrief.response.status, 502);
-		assert.equal(invalidBrief.body.code, 'INVALID_OUTPUT');
-		assert.equal((await api('/api/perencanaan')).body.length, 0);
 		const planned = await api('/api/plan', {
 			method: 'POST',
 			body: JSON.stringify({
@@ -238,10 +219,22 @@ test(
 				answers: { 1: 'Developer' }
 			})
 		});
-		assert.equal(planned.response.status, 201, JSON.stringify(planned.body));
-		const projectId = planned.body.dbId;
-		const subFeatureId = planned.body.plan.fiturs[0].subFiturs[0].id;
-		const firstTask = planned.body.plan.fiturs[0].subFiturs[0].tasks[0];
+		assert.equal(planned.response.status, 202, JSON.stringify(planned.body));
+		assert.equal(planned.body.status, 'queued');
+		await new Promise((resolve) => setTimeout(resolve, 700));
+		let job;
+		for (let attempt = 0; attempt < 80; attempt += 1) {
+			job = (await api(`/api/plan?jobId=${planned.body.id}`)).body;
+			if (job.status === 'completed' || job.status === 'failed') break;
+			await new Promise((resolve) => setTimeout(resolve, 100));
+		}
+		assert.equal(job.status, 'completed', JSON.stringify(job));
+		assert.equal(job.progress, 100);
+		assert.equal(simulatedTimeouts, 2, 'task part should be retried once after timeout');
+		const projectId = job.perencanaanId;
+		const storedPlan = (await api(`/api/perencanaan/${projectId}`)).body;
+		const subFeatureId = storedPlan.fiturs[0].subFiturs[0].id;
+		const firstTask = storedPlan.fiturs[0].subFiturs[0].tasks[0];
 		assert.equal(firstTask.title, 'WAJIB: Buat kerangka frontend dan backend');
 		assert.match(firstTask.description, /frontend \(Svelte\).*backend \(Node\)/);
 
@@ -262,6 +255,7 @@ test(
 			body: JSON.stringify({ subFiturId: subFeatureId })
 		});
 		assert.equal(generated.response.status, 200, JSON.stringify(generated.body));
+		assert.equal(generated.body.generated, false);
 		assert.equal(generated.body.tasks.length, 2);
 		assert.match(generated.body.tasks[1].description, /Kriteria selesai/);
 		assert.ok(generated.body.tasks[1].description.length > 2000);
@@ -364,15 +358,15 @@ test(
 
 		const detailed = await api('/api/tasks', {
 			method: 'POST',
-			body: JSON.stringify({ subFiturId: planned.body.plan.fiturs[0].subFiturs[1].id })
+			body: JSON.stringify({ subFiturId: storedPlan.fiturs[0].subFiturs[1].id })
 		});
 		assert.equal(detailed.response.status, 200, JSON.stringify(detailed.body));
-		assert.equal(detailed.body.generated, true);
+		assert.equal(detailed.body.generated, false);
 		assert.ok(detailed.body.tasks[0].description.includes('Prasyarat dan asumsi'));
 		assert.ok(detailed.body.tasks[0].description.length > 2000);
 		const reused = await api('/api/tasks', {
 			method: 'POST',
-			body: JSON.stringify({ subFiturId: planned.body.plan.fiturs[0].subFiturs[1].id })
+			body: JSON.stringify({ subFiturId: storedPlan.fiturs[0].subFiturs[1].id })
 		});
 		assert.equal(reused.body.generated, false);
 		assert.equal(reused.body.tasks[0].id, detailed.body.tasks[0].id);
@@ -401,6 +395,13 @@ test(
 		assert.equal(secondUser.response.status, 201);
 		const crossUser = await api(`/api/perencanaan/${projectId}`);
 		assert.equal(crossUser.response.status, 404);
+		const crossUserJob = await api(`/api/plan?jobId=${planned.body.id}`);
+		assert.equal(crossUserJob.response.status, 404);
+		const invalidWorkerToken = await api('/api/plan/run', {
+			method: 'POST',
+			body: JSON.stringify({ id: planned.body.id, token: 'invalid-worker-token' })
+		});
+		assert.equal(invalidWorkerToken.response.status, 401);
 
 		const secondPort = await freePort();
 		const secondApp = spawnPreview(secondPort, appEnv);

@@ -79,6 +79,41 @@ export const perencanaan = sqliteTable(
 	(table) => [index('perencanaan_user_created_idx').on(table.userId, table.createdAt)]
 );
 
+export const planningJob = sqliteTable(
+	'planning_job',
+	{
+		id: text('id')
+			.primaryKey()
+			.$defaultFn(() => crypto.randomUUID()),
+		userId: text('user_id')
+			.notNull()
+			.references(() => user.id, { onDelete: 'cascade' }),
+		perencanaanId: text('perencanaan_id').references(() => perencanaan.id, {
+			onDelete: 'set null'
+		}),
+		status: text('status').notNull().default('queued'), // queued|running|completed|failed
+		stage: text('stage').notNull().default('outline'), // outline|tasks|complete
+		inputJson: text('input_json').notNull(),
+		workerTokenHash: text('worker_token_hash').notNull(),
+		currentPart: integer('current_part').notNull().default(0),
+		totalParts: integer('total_parts').notNull().default(1),
+		attempts: integer('attempts').notNull().default(0),
+		errorCode: text('error_code'),
+		errorMessage: text('error_message'),
+		leaseExpiresAt: integer('lease_expires_at', { mode: 'timestamp' }),
+		createdAt: integer('created_at', { mode: 'timestamp' })
+			.notNull()
+			.$defaultFn(() => new Date()),
+		updatedAt: integer('updated_at', { mode: 'timestamp' })
+			.notNull()
+			.$defaultFn(() => new Date())
+	},
+	(table) => [
+		index('planning_job_user_created_idx').on(table.userId, table.createdAt),
+		index('planning_job_status_lease_idx').on(table.status, table.leaseExpiresAt)
+	]
+);
+
 export const fitur = sqliteTable(
 	'fitur',
 	{

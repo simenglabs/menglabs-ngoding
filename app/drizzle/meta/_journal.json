@@ -15,6 +15,13 @@
       "when": 1789645450645,
       "tag": "0001_misty_post",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1789659332814,
+      "tag": "0002_lowly_quasimodo",
+      "breakpoints": true
     }
   ]
 }

@@ -58,6 +58,7 @@ export type Draft = {
 	answers?: Record<number, string | string[]>;
 	plan?: Plan;
 	dbId?: string; // perencanaan.id di DB
+	planningJobId?: string;
 	prdResult?: { id: string; content: string; model: string; usage?: { total_tokens: number } };
 };
 

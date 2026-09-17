@@ -10,6 +10,12 @@
 	let taskLoading = $state<string | null>(null);
 	let kanbanHint = $state<string | null>(null);
 	let activePlanId = $state<string | null>(null);
+	let planningJobId = $state<string | null>(null);
+	let planningProgress = $state(0);
+	let planningStage = $state<'outline' | 'tasks'>('outline');
+	let planningFailed = $state(false);
+	let pollTimer: ReturnType<typeof setTimeout> | null = null;
+	let destroyed = false;
 	let loadedLayoutId: string | null = null;
 
 	// selected sub -> right panel
@@ -30,118 +36,113 @@
 	let dragStart = { x: 0, y: 0 };
 	let dragOrig = { x: 0, y: 0 };
 
+	async function loadStoredPlan(id: string) {
+		const response = await fetch(`/api/perencanaan/${id}`);
+		if (!response.ok)
+			throw new Error(
+				response.status === 404 ? 'Perencanaan tidak ditemukan.' : 'Gagal memuat perencanaan.'
+			);
+		const data = await response.json();
+		plan = {
+			perencanaan: { title: data.perencanaan.title, description: data.perencanaan.description },
+			fiturs: data.fiturs.map((feature: Plan['fiturs'][number]) => ({
+				...feature,
+				subFiturs: feature.subFiturs.map((sub) => ({ ...sub, tasks: sub.tasks ?? [] }))
+			}))
+		};
+		activePlanId = id;
+		loading = false;
+		await tick();
+		queueMicrotask(updateLines);
+	}
+
+	async function pollPlanningJob(id: string) {
+		if (destroyed) return;
+		try {
+			const response = await fetch(`/api/plan?jobId=${encodeURIComponent(id)}`);
+			const data = await response.json();
+			if (!response.ok) throw new Error(data.message ?? 'Status planning tidak dapat dimuat.');
+			planningProgress = data.progress ?? 0;
+			planningStage = data.stage === 'tasks' ? 'tasks' : 'outline';
+			if (data.status === 'completed' && data.perencanaanId) {
+				const draft = loadDraft();
+				if (draft) saveDraft({ ...draft, planningJobId: undefined, dbId: data.perencanaanId });
+				await goto(`/perencanaan?id=${data.perencanaanId}`, { replaceState: true, noScroll: true });
+				await loadStoredPlan(data.perencanaanId);
+				return;
+			}
+			if (data.status === 'failed') {
+				planningFailed = true;
+				error = data.error?.message ?? 'Planning gagal pada salah satu bagian.';
+				loading = false;
+				return;
+			}
+			pollTimer = setTimeout(() => void pollPlanningJob(id), 2000);
+		} catch (cause) {
+			error = cause instanceof Error ? cause.message : 'Gagal membaca status planning.';
+			pollTimer = setTimeout(() => void pollPlanningJob(id), 5000);
+		}
+	}
+
+	async function retryPlanning() {
+		if (!planningJobId) return;
+		planningFailed = false;
+		error = '';
+		loading = true;
+		const response = await fetch(`/api/plan/${planningJobId}/retry`, { method: 'POST' });
+		if (!response.ok) {
+			loading = false;
+			error = 'Planning belum bisa dilanjutkan. Coba lagi.';
+			return;
+		}
+		void pollPlanningJob(planningJobId);
+	}
+
 	onMount(() => {
 		(async () => {
-			// 1. cek ?id= atau ?perencanaanId= di URL (deep link setelah deploy)
-			const urlId =
-				new URLSearchParams(window.location.search).get('id') ||
-				new URLSearchParams(window.location.search).get('perencanaanId');
-			if (urlId) {
-				try {
-					const r = await fetch(`/api/perencanaan/${urlId}`);
-					if (r.ok) {
-						const d = await r.json();
-						// map DB -> Plan shape
-						plan = {
-							perencanaan: { title: d.perencanaan.title, description: d.perencanaan.description },
-							fiturs: d.fiturs.map(
-								(f: {
-									id: string;
-									title: string;
-									description: string;
-									subFiturs: {
-										id: string;
-										title: string;
-										description: string;
-										tasks: {
-											id: string;
-											title: string;
-											description: string;
-											priority: string;
-											estimate: string;
-											status: string;
-										}[];
-									}[];
-								}) => ({
-									id: f.id,
-									title: f.title,
-									description: f.description,
-									subFiturs: f.subFiturs.map((s) => ({
-										id: s.id,
-										title: s.title,
-										description: s.description,
-										tasks: s.tasks
-									}))
-								})
-							)
-						} as Plan;
-						activePlanId = urlId;
-						loading = false;
-						await tick();
-						queueMicrotask(updateLines);
-						return;
-					}
-					error = r.status === 404 ? 'Perencanaan tidak ditemukan.' : 'Gagal memuat perencanaan.';
-				} catch {
-					error = 'Gagal memuat perencanaan.';
+			const params = new URLSearchParams(window.location.search);
+			const urlId = params.get('id') || params.get('perencanaanId');
+			const urlJob = params.get('job');
+			try {
+				if (urlId) return await loadStoredPlan(urlId);
+				const draft = loadDraft();
+				const existingJob = urlJob || draft?.planningJobId;
+				if (existingJob) {
+					planningJobId = existingJob;
+					await goto(`/perencanaan?job=${existingJob}`, { replaceState: true, noScroll: true });
+					return void pollPlanningJob(existingJob);
 				}
+				if (draft?.dbId) return await loadStoredPlan(draft.dbId);
+				if (!draft?.prompt || !draft.techMode) return await goto('/create');
+				const response = await fetch('/api/plan', {
+					method: 'POST',
+					headers: { 'content-type': 'application/json' },
+					body: JSON.stringify({
+						prompt: draft.prompt,
+						lang: draft.lang,
+						techMode: draft.techMode,
+						techStack: draft.techStack,
+						questions: draft.questions,
+						answers: draft.answers
+					})
+				});
+				const data = await response.json();
+				if (!response.ok) throw new Error(data.message ?? 'Planning belum dapat dimulai.');
+				planningJobId = data.id;
+				saveDraft({ ...draft, planningJobId: data.id });
+				await goto(`/perencanaan?job=${data.id}`, { replaceState: true, noScroll: true });
+				void pollPlanningJob(data.id);
+			} catch (cause) {
+				error = cause instanceof Error ? cause.message : 'Planning belum dapat dimulai.';
 				loading = false;
-				return;
 			}
-
-			const d = loadDraft();
-			// Draft hanya untuk wizard yang belum pernah disimpan.
-			if (d?.plan && !d.dbId) {
-				plan = d.plan;
-				loading = false;
-				await tick();
-				queueMicrotask(updateLines);
-				return;
-			}
-			if (d?.dbId) {
-				await goto('/dashboard');
-				return;
-			}
-			if (d?.prompt && d?.techMode) {
-				// 4. generate baru via LLM -> persist ke Turso
-				try {
-					const res = await fetch('/api/plan', {
-						method: 'POST',
-						headers: { 'content-type': 'application/json' },
-						body: JSON.stringify({
-							prompt: d.prompt,
-							lang: d.lang,
-							techMode: d.techMode,
-							techStack: d.techStack,
-							questions: d.questions,
-							answers: d.answers
-						})
-					});
-					const data = await res.json();
-					if (!res.ok) error = data.message ?? 'Gagal generate perencanaan';
-					else {
-						plan = data.plan as Plan;
-						activePlanId = data.dbId as string;
-						saveDraft({ ...d, plan, dbId: data.dbId as string | undefined });
-						if (data.dbId)
-							await goto(`/perencanaan?id=${data.dbId}`, { replaceState: true, noScroll: true });
-						await tick();
-						queueMicrotask(updateLines);
-					}
-				} catch (e) {
-					error = String(e);
-				} finally {
-					loading = false;
-				}
-				return;
-			}
-			// Tanpa ID atau draft, jangan memilih proyek terbaru secara diam-diam.
-			await goto('/create');
 		})();
 		window.addEventListener('resize', updateLines);
 		window.addEventListener('mousemove', onMouseMove);
 		window.addEventListener('mouseup', onMouseUp);
 		return () => {
+			destroyed = true;
+			if (pollTimer) clearTimeout(pollTimer);
 			window.removeEventListener('resize', updateLines);
 			window.removeEventListener('mousemove', onMouseMove);
 			window.removeEventListener('mouseup', onMouseUp);
@@ -349,14 +350,27 @@
 						stroke-linecap="round"
 					/></svg
 				>
-				<p class="text-sm text-[#94a3b8]">
-					Sedang menyusun fitur dan tugas. Tunggu hingga rencana selesai…
+				<p class="text-sm font-semibold">
+					{planningStage === 'outline' ? 'Menyusun struktur proyek…' : 'Menyusun tugas per bagian…'}
+				</p>
+				<div class="h-2 w-full max-w-md overflow-hidden rounded-full bg-[#1e293b]">
+					<div
+						class="h-full rounded-full bg-[#c45a36] transition-all"
+						style={`width: ${planningProgress}%`}
+					></div>
+				</div>
+				<p class="max-w-md text-center text-sm text-[#94a3b8]">
+					{planningProgress}% selesai. Kamu boleh menutup halaman atau membuka menu lain. Proses
+					tetap berjalan di server.
 				</p>
 			</div>{/if}
 		{#if error}<div
 				class="mt-6 rounded-xl border border-red-900/50 bg-red-950/40 px-4 py-3 text-sm text-red-200"
 			>
 				{error}
+				{#if planningFailed}<button onclick={retryPlanning} class="secondary-button mt-3"
+						>Lanjutkan dari bagian terakhir</button
+					>{/if}
 			</div>{/if}
 
 		{#if plan && !loading}
